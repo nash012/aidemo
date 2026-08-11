@@ -99,6 +99,14 @@ try {
   game._debugAI.restart();
   assert.equal(game._debugAI.getDifficulty(), "easy",
     "restart must preserve the selected difficulty");
+
+  for(var layoutIndex = 0; layoutIndex < 5; layoutIndex++){
+    var started = Date.now();
+    game._debugAI.choose(game._debugAI.initialPieces(layoutIndex), 1, "hard");
+    var elapsed = Date.now() - started;
+    assert.ok(elapsed < 500,
+      "hard layout " + layoutIndex + " took " + elapsed + "ms");
+  }
 } finally {
   Math.random = savedRandom;
   game.exit();
