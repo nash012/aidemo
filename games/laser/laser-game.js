@@ -161,6 +161,7 @@ module.exports = {
           var d = DIRS8[j];
           var nr=p.row+d[0], nc=p.col+d[1];
           if(nr<0||nr>=ROWS||nc<0||nc>=COLS) continue;
+          if(!isZoneAllowed(nr, nc, p.owner)) continue; // 区域限制
           if(!pieceAt(pieces, nr, nc)) acts.push({pi:i, kind:"move", r:nr, c:nc});
         }
         acts.push({pi:i, kind:"rot", d:1});
@@ -171,8 +172,10 @@ module.exports = {
             var nr2=p.row+d2[0], nc2=p.col+d2[1];
             if(nr2<0||nr2>=ROWS||nc2<0||nc2>=COLS) continue;
             var t = pieceAt(pieces, nr2, nc2);
-            if(t && (t.type===SHIELD || t.type===MIRROR))
-              acts.push({pi:i, kind:"swap", ti:pieces.indexOf(t)});
+            if(t && (t.type===SHIELD || t.type===MIRROR)){
+              if(isZoneAllowed(nr2, nc2, p.owner) && isZoneAllowed(p.row, p.col, t.owner))
+                acts.push({pi:i, kind:"swap", ti:pieces.indexOf(t)});
+            }
           }
         }
       }
@@ -320,33 +323,74 @@ module.exports = {
       return eq[Math.floor(Math.random()*eq.length)].a;
     }
 
-    /* -------------------- 5种官方布局 -------------------- */
+    /* -------------------- 保留区域（红色区只允许红方，白色区只允许蓝方） -------------------- */
+    // 红色区域：只有红方(player 0)棋子可进入
+    var RED_ZONES = {};
+    [[6,9],[5,9],[4,9],[3,9],[2,9],[1,9],[0,9],[7,1],[0,1]].forEach(function(z){ RED_ZONES[z[0]+","+z[1]] = 1; });
+    // 白色区域：只有蓝方(player 1)棋子可进入
+    var BLUE_ZONES = {};
+    [[7,0],[6,0],[5,0],[4,0],[3,0],[2,0],[1,0],[7,8],[0,8]].forEach(function(z){ BLUE_ZONES[z[0]+","+z[1]] = 1; });
+
+    function isZoneAllowed(row, col, owner){
+      var key = row + "," + col;
+      if(owner === 0 && BLUE_ZONES[key]) return false; // 红方不能进蓝区
+      if(owner === 1 && RED_ZONES[key]) return false;  // 蓝方不能进红区
+      return true;
+    }
+
+    /* -------------------- 5种官方布局（Khet 2.0官方非对称阵型） -------------------- */
     var LAYOUTS = [
       {name:"幺点", en:"ACE", desc:"入门阵型，简单均衡",
-       p0:[[LASER,7,9,LEFT],[KING,7,4,UP],[SHIELD,7,5,RIGHT],[SHIELD,7,3,UP],
-           [MIRROR,6,2,0],[MIRROR,6,3,1],[MIRROR,6,4,0],[MIRROR,6,5,1],
-           [MIRROR,6,6,0],[MIRROR,6,7,1],[MIRROR,7,2,0],
-           [SWITCH,5,3,0],[SWITCH,5,6,1]]},
+       p0:[[LASER,7,9,UP],[SHIELD,7,5,LEFT],[KING,7,4,RIGHT],[SHIELD,7,3,LEFT],
+           [MIRROR,7,2,UP],[MIRROR,6,7,RIGHT],[MIRROR,4,9,LEFT],
+           [SWITCH,4,5,RIGHT],[SWITCH,4,4,DOWN],[MIRROR,4,2,UP],
+           [MIRROR,3,9,UP],[MIRROR,3,2,LEFT],[MIRROR,2,3,UP]],
+       p1:[[MIRROR,5,6,DOWN],[MIRROR,4,7,RIGHT],[MIRROR,4,0,DOWN],
+           [MIRROR,3,7,DOWN],[SWITCH,3,5,DOWN],[SWITCH,3,4,RIGHT],
+           [MIRROR,3,0,RIGHT],[MIRROR,1,2,LEFT],[MIRROR,0,7,DOWN],
+           [SHIELD,0,6,RIGHT],[KING,0,5,RIGHT],[SHIELD,0,4,RIGHT],
+           [LASER,0,0,DOWN]]},
       {name:"好奇", en:"CURIOSITY", desc:"镜面前推，开局更具进攻性",
-       p0:[[LASER,7,9,LEFT],[KING,7,4,UP],[SHIELD,7,5,RIGHT],[SHIELD,7,3,UP],
-           [MIRROR,5,2,0],[MIRROR,5,4,1],[MIRROR,5,6,0],[MIRROR,6,3,0],
-           [MIRROR,6,5,1],[MIRROR,6,7,0],[MIRROR,7,2,1],
-           [SWITCH,5,3,1],[SWITCH,5,7,0]]},
+       p0:[[LASER,7,9,UP],[SHIELD,7,5,LEFT],[KING,7,4,RIGHT],[SHIELD,7,3,LEFT],
+           [SWITCH,7,2,DOWN],[MIRROR,5,3,LEFT],[MIRROR,4,9,LEFT],
+           [SWITCH,4,4,DOWN],[MIRROR,4,1,UP],[MIRROR,3,9,UP],
+           [MIRROR,3,4,DOWN],[MIRROR,3,1,LEFT],[MIRROR,2,3,UP]],
+       p1:[[MIRROR,5,6,DOWN],[MIRROR,4,8,RIGHT],[MIRROR,4,5,UP],
+           [MIRROR,4,0,DOWN],[MIRROR,3,8,DOWN],[SWITCH,3,5,DOWN],
+           [MIRROR,3,0,RIGHT],[MIRROR,2,6,RIGHT],[SWITCH,0,7,DOWN],
+           [SHIELD,0,6,RIGHT],[KING,0,5,RIGHT],[SHIELD,0,4,RIGHT],
+           [LASER,0,0,DOWN]]},
       {name:"圣杯", en:"GRAIL", desc:"国王重兵把守，防御坚固",
-       p0:[[LASER,7,9,LEFT],[KING,7,4,UP],[SHIELD,7,5,RIGHT],[SHIELD,7,3,UP],
-           [MIRROR,6,3,0],[MIRROR,6,4,1],[MIRROR,6,5,0],[MIRROR,7,2,1],
-           [MIRROR,5,2,0],[MIRROR,5,3,1],[MIRROR,5,5,0],
-           [SWITCH,6,2,0],[SWITCH,6,7,1]]},
+       p0:[[LASER,7,9,UP],[MIRROR,7,5,RIGHT],[SHIELD,7,4,LEFT],[MIRROR,7,3,UP],
+           [KING,6,4,RIGHT],[MIRROR,5,9,LEFT],[MIRROR,5,5,RIGHT],
+           [SHIELD,5,4,LEFT],[SWITCH,5,3,DOWN],[MIRROR,4,9,UP],
+           [SWITCH,4,7,RIGHT],[MIRROR,3,6,DOWN],[MIRROR,3,4,UP]],
+       p1:[[MIRROR,4,5,DOWN],[MIRROR,4,3,UP],[SWITCH,3,2,RIGHT],
+           [MIRROR,3,0,DOWN],[SWITCH,2,6,DOWN],[SHIELD,2,5,RIGHT],
+           [MIRROR,2,4,LEFT],[MIRROR,2,0,RIGHT],[KING,1,5,RIGHT],
+           [MIRROR,0,6,DOWN],[SHIELD,0,5,RIGHT],[MIRROR,0,4,LEFT],
+           [LASER,0,0,DOWN]]},
       {name:"水星", en:"MERCURY", desc:"镜链复杂，反射路径多变",
-       p0:[[LASER,7,9,LEFT],[KING,7,3,UP],[SHIELD,7,4,RIGHT],[SHIELD,7,2,UP],
-           [MIRROR,5,4,0],[MIRROR,5,5,1],[MIRROR,6,2,0],[MIRROR,6,3,1],
-           [MIRROR,6,5,0],[MIRROR,6,6,1],[MIRROR,7,1,0],
-           [SWITCH,5,3,0],[SWITCH,6,7,1]]},
+       p0:[[LASER,7,9,UP],[MIRROR,7,5,RIGHT],[KING,7,4,RIGHT],[MIRROR,7,3,UP],
+           [SHIELD,6,4,LEFT],[MIRROR,6,3,UP],[MIRROR,5,9,UP],
+           [SWITCH,5,6,DOWN],[SHIELD,5,4,LEFT],[MIRROR,4,9,LEFT],
+           [MIRROR,3,8,LEFT],[MIRROR,3,4,UP],[SWITCH,0,9,DOWN]],
+       p1:[[SWITCH,7,0,DOWN],[MIRROR,4,5,DOWN],[MIRROR,4,1,RIGHT],
+           [MIRROR,3,0,RIGHT],[SHIELD,2,5,RIGHT],[SWITCH,2,3,DOWN],
+           [MIRROR,2,0,DOWN],[MIRROR,1,6,DOWN],[SHIELD,1,5,RIGHT],
+           [MIRROR,0,6,DOWN],[KING,0,5,RIGHT],[MIRROR,0,4,LEFT],
+           [LASER,0,0,DOWN]]},
       {name:"苏菲", en:"SOPHIE", desc:"棋子分散全盘，高阶对弈",
-       p0:[[LASER,7,9,LEFT],[KING,7,4,UP],[SHIELD,7,5,RIGHT],[SHIELD,7,3,UP],
-           [MIRROR,4,3,0],[MIRROR,4,6,1],[MIRROR,5,2,1],[MIRROR,5,7,0],
-           [MIRROR,6,4,0],[MIRROR,6,5,1],[MIRROR,7,2,0],
-           [SWITCH,5,4,1],[SWITCH,5,5,0]]},
+       p0:[[LASER,7,9,UP],[KING,7,5,RIGHT],[MIRROR,7,3,UP],
+           [SHIELD,6,6,LEFT],[SHIELD,6,4,DOWN],[MIRROR,5,9,LEFT],
+           [MIRROR,5,5,RIGHT],[MIRROR,5,4,UP],[SWITCH,4,2,RIGHT],
+           [MIRROR,2,9,UP],[SWITCH,2,7,DOWN],[MIRROR,1,9,LEFT],
+           [MIRROR,0,5,UP]],
+       p1:[[MIRROR,7,4,DOWN],[MIRROR,6,0,RIGHT],[SWITCH,5,2,DOWN],
+           [MIRROR,5,0,DOWN],[SWITCH,3,7,RIGHT],[MIRROR,2,5,DOWN],
+           [MIRROR,2,4,LEFT],[MIRROR,2,0,RIGHT],[SHIELD,1,5,UP],
+           [SHIELD,1,3,RIGHT],[MIRROR,0,6,DOWN],[KING,0,4,RIGHT],
+           [LASER,0,0,DOWN]]},
     ];
 
     function makeInitialPieces(layoutIndex){
@@ -356,8 +400,8 @@ module.exports = {
       layout.p0.forEach(function(d, idx){
         pieces.push({id:"r"+idx, type:d[0], owner:0, row:d[1], col:d[2], orientation:d[3], alive:true});
       });
-      layout.p0.forEach(function(d, idx){
-        pieces.push({id:"b"+idx, type:d[0], owner:1, row:7-d[1], col:9-d[2], orientation:(d[3]+2)%4, alive:true});
+      layout.p1.forEach(function(d, idx){
+        pieces.push({id:"b"+idx, type:d[0], owner:1, row:d[1], col:d[2], orientation:d[3], alive:true});
       });
       return pieces;
     }
@@ -538,6 +582,24 @@ module.exports = {
         for(var c=0;c<COLS;c++){
           if((r+c)%2===0){
             drawCellQuad3D(r, c, 0.002, "rgba(80,86,100,0.35)", null, 0);
+          }
+        }
+      }
+
+      // 保留区域着色
+      for(var r=0;r<ROWS;r++){
+        for(var c=0;c<COLS;c++){
+          var zkey = r + "," + c;
+          if(RED_ZONES[zkey]){
+            drawCellQuad3D(r, c, 0.003, "rgba(200,60,50,0.30)", null, 0);
+            var cp1 = project3D(c - (COLS-1)/2, 0.01, r - (ROWS-1)/2);
+            ctx.fillStyle = "rgba(220,80,70,0.55)";
+            ctx.beginPath(); ctx.arc(cp1.x, cp1.y, cp1.s*0.16, 0, 6.283); ctx.fill();
+          } else if(BLUE_ZONES[zkey]){
+            drawCellQuad3D(r, c, 0.003, "rgba(240,240,245,0.25)", null, 0);
+            var cp2 = project3D(c - (COLS-1)/2, 0.01, r - (ROWS-1)/2);
+            ctx.fillStyle = "rgba(220,225,235,0.55)";
+            ctx.beginPath(); ctx.arc(cp2.x, cp2.y, cp2.s*0.16, 0, 6.283); ctx.fill();
           }
         }
       }
@@ -767,7 +829,10 @@ module.exports = {
       var bx = wx + dx * barrelLen * 0.5;
       var bz = wz + dz * barrelLen * 0.5;
       var ph2 = h + 0.15;
-      draw3DBox(bx, bz, barrelW, barrelLen, ph2, "#4a4a5e", "#2a2a3e");
+      // 根据朝向决定炮管的长宽方向：水平方向时宽=长、深=窄；垂直方向时宽=窄、深=长
+      var bw = (dx !== 0) ? barrelLen : barrelW;
+      var bd = (dx !== 0) ? barrelW : barrelLen;
+      draw3DBox(bx, bz, bw, bd, ph2, "#4a4a5e", "#2a2a3e");
 
       // 发射口光晕
       var tipX = wx + dx * barrelLen;
@@ -1531,9 +1596,12 @@ module.exports = {
         var d = DIRS8[i];
         var nr = p.row + d[0], nc = p.col + d[1];
         if(nr<0 || nr>=ROWS || nc<0 || nc>=COLS) continue;
+        if(!isZoneAllowed(nr, nc, p.owner)) continue; // 区域限制
         var t = pieceAt(G.pieces, nr, nc);
         if(!t) ts.push({r:nr, c:nc, swap:false});
-        else if(p.type===SWITCH && (t.type===SHIELD || t.type===MIRROR)) ts.push({r:nr, c:nc, swap:true});
+        else if(p.type===SWITCH && (t.type===SHIELD || t.type===MIRROR)){
+          if(isZoneAllowed(p.row, p.col, t.owner)) ts.push({r:nr, c:nc, swap:true}); // 被换棋子也不能进入禁区
+        }
       }
       return ts;
     }
