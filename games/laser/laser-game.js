@@ -41,6 +41,11 @@ module.exports = {
     var DIRS8 = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
     var LASER = "laser", KING = "king", SHIELD = "shield", MIRROR = "mirror", SWITCH = "switch";
     var PIECE_VAL = { king:10000, shield:3, switch:4, mirror:2, laser:0 };
+    var AI_LEVELS = {
+      easy:   {attack:0.25, defense:1.2, guard:2.0, reply:0,   candidates:16, variety:8},
+      normal: {attack:1.8,  defense:0.7, guard:0.6, reply:0.3, candidates:32, variety:3},
+      hard:   {attack:1.2,  defense:1.2, guard:1.5, reply:1.0, candidates:40, variety:0.5}
+    };
     var MIRROR_MAP = [ {1:0,2:3}, {3:0,2:1}, {3:2,0:1}, {1:2,0:3} ];
     var SW_SLASH = {1:0,0:1,3:2,2:3};
     var SW_BACK  = {1:2,2:1,3:0,0:3};
@@ -204,16 +209,41 @@ module.exports = {
     }
 
     /* -------------------- AI -------------------- */
-    function opponentCanWin(pieces, aiPlayer){
-      var opp = 1 - aiPlayer;
-      var acts = generateActions(pieces, opp, {noSwap:true});
-      for(var i=0;i<acts.length;i++){
-        var res = resolveTurn(pieces, opp, acts[i]);
-        if(res.eliminated && res.eliminated.type===KING && res.eliminated.owner===aiPlayer) return true;
-      }
-      return false;
+    function allActions(pieces, player){
+      var acts = generateActions(pieces, player);
+      acts.push({kind:"skip"});
+      return acts;
     }
-    function evaluatePosition(pieces, player){
+    function findKing(pieces, player){
+      for(var i=0;i<pieces.length;i++){
+        var p = pieces[i];
+        if(p.alive && p.owner===player && p.type===KING) return p;
+      }
+      return null;
+    }
+    function laserPressure(pieces, player){
+      var laser = getLaser(pieces, player);
+      var king = findKing(pieces, 1-player);
+      if(!laser || !king) return 0;
+      var sim = simulateLaser(pieces, laser);
+      var minDist = Infinity, turns = 0, enemyHalf = 0;
+      var prevDir = -1;
+      for(var i=0;i<sim.path.length;i++){
+        var pt = sim.path[i];
+        var dist = Math.abs(pt.r-king.row) + Math.abs(pt.c-king.col);
+        if(dist < minDist) minDist = dist;
+        if((player===1 && pt.r>=ROWS/2) || (player===0 && pt.r<ROWS/2)) enemyHalf++;
+        if(i>0){
+          var prev = sim.path[i-1];
+          var dir = pt.r>prev.r ? DOWN : pt.r<prev.r ? UP : pt.c>prev.c ? RIGHT : LEFT;
+          if(prevDir>=0 && dir!==prevDir) turns++;
+          prevDir = dir;
+        }
+      }
+      return Math.max(0, 12-minDist*3) + Math.min(sim.path.length, 14)*0.35 + turns*2 + enemyHalf*0.3;
+    }
+    function evaluatePosition(pieces, player, difficulty){
+      var cfg = AI_LEVELS[difficulty] || AI_LEVELS.normal;
       var opp = 1 - player;
       var score = 0;
       for(var i=0;i<pieces.length;i++){
@@ -222,104 +252,75 @@ module.exports = {
         var v = PIECE_VAL[p.type] || 0;
         score += (p.owner===player ? v : -v);
       }
-      var myKing = null, oppKing = null;
-      for(var j=0;j<pieces.length;j++){
-        if(!pieces[j].alive) continue;
-        if(pieces[j].type===KING){ if(pieces[j].owner===player) myKing=pieces[j]; else oppKing=pieces[j]; }
-      }
-      var myLaser = getLaser(pieces, player);
-      if(myLaser && oppKing){
-        var sim = simulateLaser(pieces, myLaser);
-        var md = Infinity;
-        for(var k=0;k<sim.path.length;k++){
-          var pt = sim.path[k];
-          var d = Math.abs(pt.r - oppKing.row) + Math.abs(pt.c - oppKing.col);
-          if(d < md) md = d;
-        }
-        if(md===0) score += 35;
-        else if(md<=1) score += 12;
-        else if(md<=2) score += 4;
-      }
-      var oppLaser = getLaser(pieces, opp);
-      if(oppLaser && myKing){
-        var sim2 = simulateLaser(pieces, oppLaser);
-        var md2 = Infinity;
-        for(var m=0;m<sim2.path.length;m++){
-          var pt2 = sim2.path[m];
-          var d2 = Math.abs(pt2.r - myKing.row) + Math.abs(pt2.c - myKing.col);
-          if(d2 < md2) md2 = d2;
-        }
-        if(md2===0) score -= 35;
-        else if(md2<=1) score -= 12;
-        else if(md2<=2) score -= 4;
-      }
+      var myKing = findKing(pieces, player);
+      score += laserPressure(pieces, player) * cfg.attack;
+      score -= laserPressure(pieces, opp) * cfg.defense;
       if(myKing){
         var guards = 0;
-        for(var n=0;n<pieces.length;n++){
-          var pp = pieces[n];
+        for(var j=0;j<pieces.length;j++){
+          var pp = pieces[j];
           if(!pp.alive || pp.owner!==player || pp.type===KING || pp.type===LASER) continue;
           if(Math.abs(pp.row-myKing.row)+Math.abs(pp.col-myKing.col)<=2) guards++;
         }
-        score += guards * 1.5;
+        score += guards * cfg.guard;
       }
       return score;
     }
-    function aiChoose(pieces, aiPlayer){
+    function aiChoose(pieces, aiPlayer, difficulty){
+      difficulty = AI_LEVELS[difficulty] ? difficulty : "normal";
+      var cfg = AI_LEVELS[difficulty];
       var opp = 1 - aiPlayer;
-      var acts = generateActions(pieces, aiPlayer);
-      acts.push({pi:0, kind:"skip"});
+      var acts = allActions(pieces, aiPlayer);
       var scored = acts.map(function(a){
         var s = 0, win = false, suicide = false;
-        var base = a.kind==="skip" ? pieces : applyAction(pieces, a);
-        var laser = getLaser(base, aiPlayer);
-        if(laser){
-          var sim = simulateLaser(base, laser);
-          if(sim.eliminated){
-            var e = sim.eliminated;
-            if(e.type===KING){
-              if(e.owner===aiPlayer){ s=-100000; suicide=true; }
-              else { s=100000; win=true; }
-            } else s += (e.owner===aiPlayer ? -PIECE_VAL[e.type] : PIECE_VAL[e.type]);
+        var res = resolveTurn(pieces, aiPlayer, a);
+        if(res.eliminated){
+          var e = res.eliminated;
+          if(e.type===KING){
+            if(e.owner===aiPlayer){ s=-100000; suicide=true; }
+            else { s=100000; win=true; }
+          } else {
+            s += (e.owner===aiPlayer ? -PIECE_VAL[e.type] : PIECE_VAL[e.type]) * 4;
           }
         }
-        return { a:a, s:s, win:win, suicide:suicide };
+        if(!win && !suicide) s += evaluatePosition(res.np, aiPlayer, difficulty);
+        return { a:a, s:s, win:win, suicide:suicide, res:res };
       });
       var wins = scored.filter(function(x){ return x.win; });
       if(wins.length) return wins[Math.floor(Math.random()*wins.length)].a;
       var safe = scored.filter(function(x){ return !x.suicide; });
       var pool = safe.length ? safe : scored;
       pool.sort(function(x,y){ return y.s - x.s; });
-      var top = pool.slice(0, 24);
+      var top = pool.slice(0, cfg.candidates);
       var finalList = [];
       for(var i=0;i<top.length;i++){
         var x = top[i];
-        var res = resolveTurn(pieces, aiPlayer, x.a);
         var s = x.s;
-        if(s < 50000){
-          var oppActs = generateActions(res.np, opp, {noSwap:true});
-          var oppBest = -Infinity, oppKillKing = false;
+        if(cfg.reply>0 && s<50000){
+          var oppActs = allActions(x.res.np, opp);
+          var worstReply = Infinity, oppKillKing = false;
           for(var j=0;j<oppActs.length;j++){
-            var oppRes = resolveTurn(res.np, opp, oppActs[j]);
-            var os = 0;
+            var oppRes = resolveTurn(x.res.np, opp, oppActs[j]);
+            var replyScore = evaluatePosition(oppRes.np, aiPlayer, difficulty);
             if(oppRes.eliminated){
               var e2 = oppRes.eliminated;
               if(e2.type===KING){
-                if(e2.owner===aiPlayer){ oppKillKing=true; os=100000; }
-                else os=-100000;
-              } else os += (e2.owner===opp ? -PIECE_VAL[e2.type] : PIECE_VAL[e2.type]);
+                if(e2.owner===aiPlayer){ oppKillKing=true; replyScore=-100000; }
+                else replyScore=100000;
+              }
             }
-            if(os > oppBest) oppBest = os;
+            if(replyScore < worstReply) worstReply = replyScore;
             if(oppKillKing) break;
           }
           if(oppKillKing){ s -= 50000; }
-          else { s -= oppBest * 0.8; s += evaluatePosition(res.np, aiPlayer); }
+          else if(worstReply<Infinity) s += worstReply * cfg.reply;
         }
         finalList.push({ a:x.a, s:s });
       }
-      if(!finalList.length) return {pi:0, kind:"skip"};
+      if(!finalList.length) return {kind:"skip"};
       finalList.sort(function(x,y){ return y.s - x.s; });
       var bestS = finalList[0].s;
-      var eq = finalList.filter(function(x){ return x.s >= bestS - 3; });
+      var eq = finalList.filter(function(x){ return x.s >= bestS - cfg.variety; });
       return eq[Math.floor(Math.random()*eq.length)].a;
     }
 
@@ -1986,6 +1987,12 @@ module.exports = {
       onTouchMove: function(e){ handleTouchMove(e); },
       onTouchEnd: function(e){ handleTouchEnd(e); },
       cameraControl: function(dx, dy){ externalCameraControl(dx, dy); },
+      _debugAI: {
+        choose: function(pieces, player, level){ return aiChoose(pieces, player, level); },
+        actions: function(pieces, player){ return generateActions(pieces, player); },
+        resolve: function(pieces, player, action){ return resolveTurn(pieces, player, action); },
+        initialPieces: function(layoutIndex){ return makeInitialPieces(layoutIndex); }
+      },
       exit: function(){
         for(var i=0;i<_timeouts.length;i++) clearTimeout(_timeouts[i]);
         _timeouts = [];
