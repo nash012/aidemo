@@ -412,27 +412,131 @@ module.exports = {
     var DIFFICULTY_LABEL = {easy:"简单", normal:"普通", hard:"困难"};
     var G = {
       pieces:[], current:0, phase:"select", sel:-1, mode:"pve", aiPlayer:1,
-      difficulty:"normal",
+      difficulty:"normal", screen:"setup", lockedLayoutIdx:null, lockedDifficulty:null,
+      rulesScroll:0, aiAnim:null, actionNotice:null,
       path:null, animT:0, over:false, winner:-1, busy:false,
       history:{}, drawOffer:false, modal:null, flashN:0, flashPiece:null,
       eliminated:null, layoutIdx:0, layoutPanel:false, undoSnapshot:null,
       particles:[], particleT:0
     };
 
-    function startGame(){
-      G.pieces = makeInitialPieces(G.layoutIdx);
-      G.current=0; G.phase="select"; G.sel=-1;
-      G.path=null; G.over=false; G.winner=-1; G.busy=false;
-      G.history={}; G.drawOffer=false; G.modal=null;
+    function clearMatchVisualState(){
+      G.path=null; G.animT=0; G.sel=-1;
       G.flashN=0; G.flashPiece=null; G.eliminated=null;
+      G.undoSnapshot=null; G.particles=[]; G.particleT=0;
+      G.aiAnim=null; G.actionNotice=null; camAnim=null;
+      for(var i=0;i<_timeouts.length;i++) clearTimeout(_timeouts[i]);
+      _timeouts = [];
+    }
+
+    function resetMatchState(pieces){
+      clearMatchVisualState();
+      G.pieces = pieces;
+      G.current=0; G.phase="select"; G.sel=-1;
+      G.over=false; G.winner=-1; G.busy=false;
+      G.history={}; G.drawOffer=false; G.modal=null;
       G.layoutPanel=false; G.undoSnapshot=null;
-      G.particles=[]; G.particleT=0;
+    }
+
+    function setSetupCamera(){
+      camAnim = null;
+      cam.yaw = DEFAULT_YAW; cam.pitch = DEFAULT_PITCH;
+      cam.cx = SW / 2; cam.cy = (boardAreaTop + boardAreaBot) / 2;
+      cam.focal = Math.min(SW * 0.82, (boardAreaBot - boardAreaTop) * 1.3) * cam.dist / 10;
+    }
+
+    function setMatchCamera(){
+      setSetupCamera();
+    }
+
+    function enterSetup(){
+      clearMatchVisualState();
+      G.screen = "setup";
+      G.lockedLayoutIdx = null;
+      G.lockedDifficulty = null;
+      G.pieces = makeInitialPieces(G.layoutIdx);
+      G.current=0; G.phase="select"; G.over=false; G.winner=-1;
+      G.history={}; G.drawOffer=false; G.modal=null; G.busy=false;
+      G.layoutPanel=false;
+      setSetupCamera();
       render();
     }
+
+    function beginMatch(){
+      if(G.screen !== "setup") return;
+      G.lockedLayoutIdx = G.layoutIdx;
+      G.lockedDifficulty = G.difficulty;
+      G.screen = "playing";
+      resetMatchState(makeInitialPieces(G.lockedLayoutIdx));
+      setMatchCamera();
+      render();
+    }
+
+    function startGame(){
+      if(G.screen === "playing") restartMatch();
+      else enterSetup();
+    }
+
+    function restartMatch(){
+      if(G.screen !== "playing") return;
+      resetMatchState(makeInitialPieces(G.lockedLayoutIdx));
+      setMatchCamera();
+      render();
+    }
+
+    function selectLayout(index){
+      if(G.screen !== "setup" || typeof index !== "number" || index % 1 !== 0 || index < 0 || index >= LAYOUTS.length) return;
+      G.layoutIdx = index;
+      G.pieces = makeInitialPieces(index);
+      render();
+    }
+
+    function selectDifficulty(level){
+      if(G.screen !== "setup" || DIFFICULTY_ORDER.indexOf(level) < 0) return;
+      G.difficulty = level;
+      render();
+    }
+
+    function openRules(){
+      if(G.screen !== "setup") return;
+      G.rulesScroll = 0;
+      G.modal = "rules";
+      render();
+    }
+
+    function closeModal(){
+      if(!G.modal) return;
+      G.modal = null;
+      render();
+    }
+
+    function requestReturnToSetup(){
+      if(G.screen !== "playing") return;
+      G.modal = "confirmReturn";
+      render();
+    }
+
+    function confirmReturnToSetup(){
+      if(G.modal !== "confirmReturn") return;
+      G.layoutIdx = G.lockedLayoutIdx;
+      G.difficulty = G.lockedDifficulty;
+      enterSetup();
+    }
+
+    function copySnapshotValue(value){
+      var copy, key;
+      if(!value || typeof value !== "object") return value;
+      if(Array.isArray(value)) return value.map(copySnapshotValue);
+      copy = {};
+      for(key in value){
+        if(Object.prototype.hasOwnProperty.call(value, key)) copy[key] = copySnapshotValue(value[key]);
+      }
+      return copy;
+    }
+
     function cycleDifficulty(){
       var i = DIFFICULTY_ORDER.indexOf(G.difficulty);
-      G.difficulty = DIFFICULTY_ORDER[(i + 1) % DIFFICULTY_ORDER.length];
-      render();
+      selectDifficulty(DIFFICULTY_ORDER[(i + 1) % DIFFICULTY_ORDER.length]);
     }
     function signature(){
       var arr = [];
@@ -1535,7 +1639,7 @@ module.exports = {
 
     /* -------------------- 按钮构建 -------------------- */
     function buildActionButtons(){
-      if(G.over || G.busy) return;
+      if(G.screen !== "playing" || G.over || G.busy) return;
       if(G.phase === "move"){
         addBtn("取消", function(){ G.phase="select"; G.sel=-1; render(); });
         addBtn("重置视角", resetView, "ghost");
@@ -1581,7 +1685,7 @@ module.exports = {
         BUTTONS.push({
           x:bx, y:by, w:bw, h:54,
           label: L.name + " (" + L.en + ")",
-          fn: (function(idx){ return function(){ G.layoutIdx = idx; G.layoutPanel = false; startGame(); }; })(i),
+          fn: (function(idx){ return function(){ selectLayout(idx); G.layoutPanel = false; render(); }; })(i),
           style: i === G.layoutIdx ? "primary" : ""
         });
       }
@@ -1713,11 +1817,11 @@ module.exports = {
 
     /* -------------------- AI 回合 -------------------- */
     function aiTurn(){
-      if(G.over) return;
+      if(G.over || G.screen !== "playing") return;
       G.busy = true; render();
       _setTrackTimeout(function(){
         var act;
-        try { act = aiChoose(G.pieces, G.aiPlayer, G.difficulty); }
+        try { act = aiChoose(G.pieces, G.aiPlayer, G.lockedDifficulty); }
         catch(e) { G.busy = false; endTurn(); return; }
         G.busy = false;
         applyAiAction(act);
@@ -1779,7 +1883,7 @@ module.exports = {
       BUTTONS.push({
         x: px + 40, y: py + ph - 56, w: pw - 80, h: BTN_H,
         label: "再来一局",
-        fn: function(){ G.modal = null; startGame(); },
+        fn: restartMatch,
         style: "primary"
       });
       for(var j=0;j<BUTTONS.length;j++) drawButton(BUTTONS[j]);
@@ -1927,6 +2031,7 @@ module.exports = {
     function processClick(x, y){
       if(G.layoutPanel){ var b1 = hitButton(x,y); if(b1&&b1.fn) b1.fn(); return; }
       if(G.modal){ var b2 = hitButton(x,y); if(b2&&b2.fn) b2.fn(); return; }
+      if(G.screen !== "playing") return;
       if(G.over || G.busy){ var b3 = hitButton(x,y); if(b3&&b3.fn) b3.fn(); return; }
       if(G.mode === "pve" && G.current === G.aiPlayer) return;
 
@@ -1972,7 +2077,7 @@ module.exports = {
     }
 
     /* -------------------- 启动 -------------------- */
-    startGame();
+    enterSetup();
 
     /* -------------------- 模块接口 -------------------- */
     return {
@@ -2004,6 +2109,27 @@ module.exports = {
         getDifficulty: function(){ return G.difficulty; },
         cycleDifficulty: cycleDifficulty,
         restart: startGame
+      },
+      _debugGame: {
+        snapshot: function(){
+          return {
+            screen:G.screen, layoutIdx:G.layoutIdx, difficulty:G.difficulty,
+            lockedLayoutIdx:G.lockedLayoutIdx, lockedDifficulty:G.lockedDifficulty,
+            rulesScroll:G.rulesScroll, modal:G.modal, busy:G.busy, actionNotice:G.actionNotice,
+            current:G.current, phase:G.phase, sel:G.sel, mode:G.mode, aiPlayer:G.aiPlayer,
+            animT:G.animT, over:G.over, winner:G.winner, drawOffer:G.drawOffer,
+            flashN:G.flashN, layoutPanel:G.layoutPanel, particleT:G.particleT,
+            pieces:G.pieces.map(copySnapshotValue),
+            aiAnim:copySnapshotValue(G.aiAnim)
+          };
+        },
+        selectLayout: selectLayout,
+        selectDifficulty: selectDifficulty,
+        beginMatch: beginMatch,
+        openRules: openRules,
+        closeModal: closeModal,
+        requestReturn: requestReturnToSetup,
+        confirmReturn: confirmReturnToSetup
       },
       exit: function(){
         for(var i=0;i<_timeouts.length;i++) clearTimeout(_timeouts[i]);

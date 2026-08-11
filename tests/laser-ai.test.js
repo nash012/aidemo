@@ -23,6 +23,61 @@ function piece(id, type, owner, row, col, orientation){
 var game = LaserGame.create(fakeContext(), 375, 667, function(){});
 assert.ok(game._debugAI, "AI debug surface must exist");
 
+assert.ok(game._debugGame, "game-state debug surface must exist");
+
+var initial = game._debugGame.snapshot();
+assert.equal(initial.screen, "setup");
+assert.equal(initial.layoutIdx, 0);
+assert.equal(initial.difficulty, "normal");
+assert.deepEqual(initial.pieces, game._debugAI.initialPieces(0));
+initial.pieces[0].row = -1;
+assert.deepEqual(game._debugGame.snapshot().pieces, game._debugAI.initialPieces(0),
+  "snapshot must not expose mutable game pieces");
+
+for(var previewLayout = 0; previewLayout < 5; previewLayout++){
+  game._debugGame.selectLayout(previewLayout);
+  assert.deepEqual(
+    game._debugGame.snapshot().pieces,
+    game._debugAI.initialPieces(previewLayout),
+    "setup preview must use the real layout " + previewLayout
+  );
+}
+
+game._debugGame.selectLayout(2);
+game._debugGame.selectDifficulty("easy");
+game._debugGame.openRules();
+game._debugGame.closeModal();
+assert.equal(game._debugGame.snapshot().layoutIdx, 2);
+assert.equal(game._debugGame.snapshot().difficulty, "easy");
+
+game._debugGame.beginMatch();
+var startedMatch = game._debugGame.snapshot();
+assert.equal(startedMatch.screen, "playing");
+assert.equal(startedMatch.lockedLayoutIdx, 2);
+assert.equal(startedMatch.lockedDifficulty, "easy");
+
+game._debugGame.selectLayout(4);
+game._debugGame.selectDifficulty("hard");
+var stillLocked = game._debugGame.snapshot();
+assert.equal(stillLocked.layoutIdx, 2, "layout is immutable during play");
+assert.equal(stillLocked.difficulty, "easy", "difficulty is immutable during play");
+
+game._debugGame.requestReturn();
+assert.equal(game._debugGame.snapshot().modal, "confirmReturn");
+game._debugGame.closeModal();
+assert.equal(game._debugGame.snapshot().screen, "playing");
+assert.deepEqual(game._debugGame.snapshot().pieces, startedMatch.pieces,
+  "cancelling return preserves match progress");
+
+game._debugGame.requestReturn();
+game._debugGame.confirmReturn();
+var returned = game._debugGame.snapshot();
+assert.equal(returned.screen, "setup");
+assert.equal(returned.modal, null);
+assert.equal(returned.layoutIdx, 2);
+assert.equal(returned.difficulty, "easy");
+assert.deepEqual(returned.pieces, game._debugAI.initialPieces(2));
+
 var safePressure = [
   piece("bl", "laser", 1, 0, 0, 2),
   piece("bm", "mirror", 1, 3, 0, 0),
@@ -91,6 +146,7 @@ try {
       (action.kind === "swap" && action.ti === 1);
   }), "red pieces must not move or swap into a blue reserved cell");
 
+  game._debugGame.selectDifficulty("normal");
   assert.equal(game._debugAI.getDifficulty(), "normal");
   game._debugAI.cycleDifficulty();
   assert.equal(game._debugAI.getDifficulty(), "hard");
