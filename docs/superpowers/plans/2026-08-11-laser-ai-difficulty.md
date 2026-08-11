@@ -58,7 +58,15 @@ function piece(id, type, owner, row, col, orientation){
 var game = LaserGame.create(fakeContext(), 375, 667, function(){});
 assert.ok(game._debugAI, "AI debug surface must exist");
 
-var pressureTrap = [
+var safePressure = [
+  piece("bl", "laser", 1, 0, 0, 2),
+  piece("bm", "mirror", 1, 3, 0, 0),
+  piece("bk", "king", 1, 0, 5, 0),
+  piece("rl", "laser", 0, 7, 9, 0),
+  piece("rk", "king", 0, 4, 4, 0)
+];
+
+var mateThreat = [
   piece("bl", "laser", 1, 0, 0, 2),
   piece("bm", "mirror", 1, 3, 0, 0),
   piece("bk", "king", 1, 3, 5, 0),
@@ -69,12 +77,12 @@ var pressureTrap = [
 var savedRandom = Math.random;
 Math.random = function(){ return 0; };
 try {
-  var normal = game._debugAI.choose(pressureTrap, 1, "normal");
+  var normal = game._debugAI.choose(safePressure, 1, "normal");
   assert.equal(normal.pi, 1, "normal should use the mirror to build pressure");
   assert.equal(normal.kind, "rot");
   assert.equal(normal.d, 1);
 
-  var hard = game._debugAI.choose(pressureTrap, 1, "hard");
+  var hard = game._debugAI.choose(mateThreat, 1, "hard");
   assert.equal(hard.pi, 2, "hard should move the exposed king");
   assert.equal(hard.kind, "move");
   assert.notEqual(hard.c, 5);
@@ -91,6 +99,32 @@ try {
     assert.ok(!(result.eliminated && result.eliminated.id === "bk"),
       level + " must avoid firing into its own king when it can move");
   });
+
+  var crossOwnerSwap = [
+    piece("bs", "switch", 1, 4, 4, 0),
+    piece("rm", "mirror", 0, 4, 5, 0)
+  ];
+  assert.ok(game._debugAI.actions(crossOwnerSwap, 1).some(function(action){
+    return action.kind === "swap" && action.pi === 0 && action.ti === 1;
+  }), "switch must be able to swap with an adjacent opponent mirror");
+
+  var blueByRedZone = [
+    piece("bs", "switch", 1, 4, 8, 0),
+    piece("rm", "mirror", 0, 4, 9, 0)
+  ];
+  assert.ok(!game._debugAI.actions(blueByRedZone, 1).some(function(action){
+    return (action.kind === "move" && action.r === 4 && action.c === 9) ||
+      (action.kind === "swap" && action.ti === 1);
+  }), "blue pieces must not move or swap into a red reserved cell");
+
+  var redByBlueZone = [
+    piece("rs", "switch", 0, 4, 1, 0),
+    piece("bm", "mirror", 1, 4, 0, 0)
+  ];
+  assert.ok(!game._debugAI.actions(redByBlueZone, 0).some(function(action){
+    return (action.kind === "move" && action.r === 4 && action.c === 0) ||
+      (action.kind === "swap" && action.ti === 1);
+  }), "red pieces must not move or swap into a blue reserved cell");
 } finally {
   Math.random = savedRandom;
   game.exit();
@@ -123,7 +157,7 @@ var AI_LEVELS = {
 3. Change `evaluatePosition` to accept the selected level and multiply offensive pressure by `AI_LEVELS[level].attack` while retaining material and king-safety terms.
 4. Change `aiChoose` to accept `difficulty`, default unknown values to `normal`, score every legal action before candidate truncation, and add `{kind:"skip"}` to both players' candidate lists.
 5. Reject actions whose own shot kills the AI king if any non-suicidal action exists.
-6. For normal, apply only a light opponent best-response penalty. For hard, enumerate the selected opponent's legal actions plus `skip`, and apply the full worst-response score; a reply that kills the AI king receives the existing `100000` terminal value.
+6. For normal, apply only a light opponent best-response penalty. For hard, enumerate the selected opponent's complete legal actions, including cross-owner switch swaps, plus `skip`, and apply the full worst-response score; a reply that kills the AI king receives the existing `100000` terminal value. Do not pass `{noSwap:true}` in the hard reply search.
 7. Return `_debugAI` from the game instance:
 
 ```js
