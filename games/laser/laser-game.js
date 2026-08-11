@@ -2264,6 +2264,11 @@ module.exports = {
       onTouchStart: function(e){ handleTouchStart(e); },
       onTouchMove: function(e){ handleTouchMove(e); },
       onTouchEnd: function(e){ handleTouchEnd(e); },
+      onBack: function(){
+        if(G.screen !== "playing") return false;
+        requestReturnToSetup();
+        return true;
+      },
       cameraControl: function(dx, dy){ externalCameraControl(dx, dy); },
       _debugAI: {
         choose: function(pieces, player, level){ return aiChoose(pieces, player, level); },

@@ -211,4 +211,51 @@ try {
   game.exit();
 }
 
+var savedWx = global.wx;
+var savedRequestAnimationFrame = global.requestAnimationFrame;
+var suiteCtx = fakeContext();
+var suiteHandlers = {};
+var suiteFrame = null;
+global.wx = {
+  getWindowInfo:function(){ return {windowWidth:375, windowHeight:667, pixelRatio:1}; },
+  createCanvas:function(){ return {getContext:function(){ return suiteCtx; }}; },
+  onTouchStart:function(fn){ suiteHandlers.start = fn; },
+  onTouchMove:function(fn){ suiteHandlers.move = fn; },
+  onTouchEnd:function(fn){ suiteHandlers.end = fn; },
+  onTouchCancel:function(fn){ suiteHandlers.cancel = fn; }
+};
+global.requestAnimationFrame = function(fn){ suiteFrame = fn; };
+try {
+  delete require.cache[require.resolve("../game.js")];
+  require("../game.js");
+
+  var laserCard = {clientX:100, clientY:320};
+  suiteHandlers.start({touches:[laserCard]});
+  suiteHandlers.end({touches:[], changedTouches:[laserCard]});
+  suiteCtx._texts.length = 0;
+  suiteHandlers.start({touches:[{clientX:20, clientY:20}]});
+  suiteFrame(16);
+  assert.ok(suiteCtx._texts.some(function(text){ return text.indexOf("游戏合集") >= 0; }),
+    "suite back must leave laser setup for the game menu");
+
+  suiteHandlers.start({touches:[laserCard]});
+  suiteHandlers.end({touches:[], changedTouches:[laserCard]});
+  var productionStart = {clientX:280, clientY:565};
+  suiteHandlers.start({touches:[productionStart]});
+  suiteHandlers.end({touches:[], changedTouches:[productionStart]});
+  suiteCtx._texts.length = 0;
+  suiteHandlers.start({touches:[{clientX:20, clientY:20}]});
+  suiteFrame(32);
+  assert.ok(suiteCtx._texts.indexOf("返回后当前对局进度将丢失。") >= 0,
+    "suite back must request confirmation during a laser match");
+  assert.ok(!suiteCtx._texts.some(function(text){ return text.indexOf("游戏合集") >= 0; }),
+    "suite back must not discard an active laser match");
+} finally {
+  delete require.cache[require.resolve("../game.js")];
+  if(savedWx === undefined) delete global.wx;
+  else global.wx = savedWx;
+  if(savedRequestAnimationFrame === undefined) delete global.requestAnimationFrame;
+  else global.requestAnimationFrame = savedRequestAnimationFrame;
+}
+
 console.log("laser AI regression tests passed");

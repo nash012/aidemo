@@ -83,7 +83,15 @@ function hitBackBtn(x, y) {
 
 wx.onTouchStart(function (e) {
   var pos = getTouchPos(e);
-  if (pos && hitBackBtn(pos.x, pos.y)) { returnToMenu(); return; }
+  if (pos && hitBackBtn(pos.x, pos.y)) {
+    var handled = false;
+    if (currentModule && currentModule.onBack) {
+      try { handled = currentModule.onBack() === true; }
+      catch (err) { console.error("[合集] back:", err); }
+    }
+    if (!handled) returnToMenu();
+    return;
+  }
   if (currentModule && currentModule.onTouchStart) {
     try { currentModule.onTouchStart(e); } catch (err) { console.error("[合集] touchStart:", err); }
   }
