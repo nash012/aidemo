@@ -57,6 +57,7 @@ module.exports = {
     // yaw=0 正对棋盘，无偏转
     var DEFAULT_YAW = 0;
     var DEFAULT_PITCH = 0.95;
+    var SETUP_PITCH = 1.08;
     var cam = {
       yaw: DEFAULT_YAW,
       pitch: DEFAULT_PITCH,
@@ -440,13 +441,29 @@ module.exports = {
 
     function setSetupCamera(){
       camAnim = null;
-      cam.yaw = DEFAULT_YAW; cam.pitch = DEFAULT_PITCH;
-      cam.cx = SW / 2; cam.cy = (boardAreaTop + boardAreaBot) / 2;
-      cam.focal = Math.min(SW * 0.82, (boardAreaBot - boardAreaTop) * 1.3) * cam.dist / 10;
+      cam.yaw = 0; cam.pitch = SETUP_PITCH;
+      cam.cx = 0; cam.cy = 0; cam.focal = 1;
+      var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      var corners = [[-COLS/2,-ROWS/2],[COLS/2,-ROWS/2],
+        [COLS/2,ROWS/2],[-COLS/2,ROWS/2]];
+      for(var i=0;i<corners.length;i++){
+        var p = project3D(corners[i][0], 0, corners[i][1]);
+        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+      }
+      var previewTop = SAFE_TOP + 70;
+      var previewBot = Math.max(previewTop + 80, SH * 0.55);
+      cam.focal = Math.min((SW - 24) / (maxX - minX),
+        (previewBot - previewTop) / (maxY - minY));
+      cam.cx = SW / 2 - (minX + maxX) * cam.focal / 2;
+      cam.cy = (previewTop + previewBot) / 2 - (minY + maxY) * cam.focal / 2;
     }
 
     function setMatchCamera(){
-      setSetupCamera();
+      camAnim = null;
+      cam.yaw = DEFAULT_YAW; cam.pitch = DEFAULT_PITCH;
+      cam.cx = SW / 2; cam.cy = (boardAreaTop + boardAreaBot) / 2;
+      cam.focal = Math.min(SW * 0.82, (boardAreaBot - boardAreaTop) * 1.3) * cam.dist / 10;
     }
 
     function enterSetup(){
@@ -1570,8 +1587,15 @@ module.exports = {
     function render(){
       try {
         BUTTONS = [];
+        ONBOARD = [];
         ctx.fillStyle = "#0a0e1a";
         ctx.fillRect(0, 0, SW, SH);
+
+        if(G.screen === "setup"){
+          renderSetup();
+          if(G.modal) drawModal();
+          return;
+        }
 
         drawBackground3D();
         drawTopBar();
@@ -1583,16 +1607,87 @@ module.exports = {
         buildOnBoardButtons3D();
         drawOnBoardButtons3D();
         drawStatus();
-        if(!G.modal && !G.layoutPanel){
+        if(!G.modal){
           buildActionButtons();
           layoutButtons();
           for(var i=0;i<BUTTONS.length;i++) drawButton(BUTTONS[i]);
         }
-        if(G.layoutPanel) drawLayoutPanel();
         if(G.modal) drawModal();
       } catch(e) {
         console.error("3D渲染错误:", e);
       }
+    }
+
+    function renderSetup(){
+      drawBackground3D();
+      var leftGlow = ctx.createRadialGradient(0, SH * 0.3, 0, 0, SH * 0.3, SW * 0.72);
+      leftGlow.addColorStop(0, "rgba(255,65,75,0.16)");
+      leftGlow.addColorStop(1, "rgba(255,65,75,0)");
+      ctx.fillStyle = leftGlow; ctx.fillRect(0, 0, SW, SH);
+      var rightGlow = ctx.createRadialGradient(SW, SH * 0.3, 0, SW, SH * 0.3, SW * 0.72);
+      rightGlow.addColorStop(0, "rgba(61,169,252,0.16)");
+      rightGlow.addColorStop(1, "rgba(61,169,252,0)");
+      ctx.fillStyle = rightGlow; ctx.fillRect(0, 0, SW, SH);
+
+      ctx.fillStyle = "#f4f7ff";
+      ctx.font = "700 23px sans-serif";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("激光镭射象棋", SW/2, SAFE_TOP + 17);
+      ctx.fillStyle = "#6bc1ff";
+      ctx.font = "700 12px sans-serif";
+      ctx.fillText("战术部署", SW/2, SAFE_TOP + 42);
+
+      drawBoard3D();
+      drawPieces3D();
+
+      var L = LAYOUTS[G.layoutIdx];
+      var setupY = Math.round(SH * 0.55) + 1;
+      ctx.fillStyle = "#e8ecf5";
+      ctx.font = "700 14px sans-serif";
+      ctx.fillText(L.name + " · " + L.en, SW/2, setupY);
+      ctx.fillStyle = "#9aa3bd";
+      ctx.font = "12px sans-serif";
+      ctx.fillText(L.desc, SW/2, setupY + 17);
+      ctx.fillStyle = "#e8ecf5";
+      ctx.font = "700 13px sans-serif";
+      ctx.fillText("选择阵型", SW/2, setupY + 39);
+      ctx.fillText("选择难度", SW/2, setupY + 122);
+
+      buildSetupButtons(setupY);
+      for(var i=0;i<BUTTONS.length;i++) drawButton(BUTTONS[i]);
+    }
+
+    function buildSetupButtons(setupY){
+      var gap = 6, margin = 12, i, row, count, x, w;
+      for(i=0;i<LAYOUTS.length;i++){
+        row = i < 3 ? 0 : 1;
+        count = row === 0 ? 3 : 2;
+        w = (SW - margin*2 - gap*(count-1)) / count;
+        x = margin + (i - (row === 0 ? 0 : 3)) * (w + gap);
+        BUTTONS.push({
+          x:x, y:setupY + 47 + row*34, w:w, h:28,
+          label:LAYOUTS[i].name,
+          fn:(function(idx){ return function(){ selectLayout(idx); }; })(i),
+          style:i === G.layoutIdx ? "primary" : "ghost"
+        });
+      }
+      gap = 8;
+      w = (SW - margin*2 - gap*2) / 3;
+      for(i=0;i<DIFFICULTY_ORDER.length;i++){
+        var level = DIFFICULTY_ORDER[i];
+        BUTTONS.push({
+          x:margin + i*(w+gap), y:setupY + 131, w:w, h:30,
+          label:DIFFICULTY_LABEL[level],
+          fn:(function(value){ return function(){ selectDifficulty(value); }; })(level),
+          style:level === G.difficulty ? "primary" : "ghost"
+        });
+      }
+      var actionY = Math.min(setupY + 176, SH - SAFE_BOT - 42);
+      w = (SW - margin*2 - gap) / 2;
+      BUTTONS.push({x:margin, y:actionY, w:w, h:42,
+        label:"规则介绍", fn:openRules, style:"ghost"});
+      BUTTONS.push({x:margin+w+gap, y:actionY, w:w, h:42,
+        label:"开始游戏", fn:beginMatch, style:"primary"});
     }
 
     function drawBackground3D(){
@@ -1654,51 +1749,9 @@ module.exports = {
         if(!(G.mode==="pve" && G.current===G.aiPlayer)){
           addBtn("\u26A1 直接发射", directFire, "primary");
         }
-        addBtn("阵型选择", function(){ G.layoutPanel = true; render(); }, "ghost");
-        addBtn("难度：" + DIFFICULTY_LABEL[G.difficulty], cycleDifficulty, "ghost");
         addBtn("重开", startGame, "danger");
+        addBtn("返回设置", requestReturnToSetup, "ghost");
         addBtn("重置视角", resetView, "ghost");
-      }
-    }
-
-    /* -------------------- 阵型选择面板 -------------------- */
-    function drawLayoutPanel(){
-      ctx.fillStyle = "rgba(6,9,20,0.85)";
-      ctx.fillRect(0, 0, SW, SH);
-      var pw = Math.min(SW - 40, 340);
-      var ph = 440;
-      var px = (SW - pw) / 2;
-      var py = (SH - ph) / 2;
-      ctx.fillStyle = "#1a2138";
-      roundRect(px, py, pw, ph, 16); ctx.fill();
-      ctx.strokeStyle = "#2e3a5e"; ctx.lineWidth = 1; ctx.stroke();
-      ctx.fillStyle = "#e8ecf5";
-      ctx.font = "700 18px sans-serif";
-      ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.fillText("选择阵型", px + pw/2, py + 30);
-      BUTTONS = [];
-      for(var i=0; i<LAYOUTS.length; i++){
-        var L = LAYOUTS[i];
-        var by = py + 60 + i * 62;
-        var bw = pw - 40;
-        var bx = px + 20;
-        BUTTONS.push({
-          x:bx, y:by, w:bw, h:54,
-          label: L.name + " (" + L.en + ")",
-          fn: (function(idx){ return function(){ selectLayout(idx); G.layoutPanel = false; render(); }; })(i),
-          style: i === G.layoutIdx ? "primary" : ""
-        });
-      }
-      BUTTONS.push({
-        x: px + 20, y: py + ph - 56, w: pw - 40, h: BTN_H,
-        label: "关闭", fn: function(){ G.layoutPanel = false; render(); }, style: "ghost"
-      });
-      for(var j=0;j<BUTTONS.length;j++) drawButton(BUTTONS[j]);
-      if(G.layoutIdx < LAYOUTS.length){
-        ctx.fillStyle = "#9aa3bd";
-        ctx.font = "12px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText(LAYOUTS[G.layoutIdx].desc, px + pw/2, py + ph - 66);
       }
     }
 
@@ -1853,7 +1906,17 @@ module.exports = {
     }
 
     /* -------------------- 弹窗 -------------------- */
+    var rulesMaxScroll = 0;
+
     function drawModal(){
+      if(G.modal === "rules"){
+        drawRulesModal();
+        return;
+      }
+      if(G.modal === "confirmReturn"){
+        drawConfirmReturnModal();
+        return;
+      }
       ctx.fillStyle = "rgba(6,9,20,0.82)";
       ctx.fillRect(0, 0, SW, SH);
       var pw = Math.min(SW - 60, 320);
@@ -1889,11 +1952,88 @@ module.exports = {
       for(var j=0;j<BUTTONS.length;j++) drawButton(BUTTONS[j]);
     }
 
+    function drawRulesModal(){
+      ctx.fillStyle = "rgba(6,9,20,0.9)";
+      ctx.fillRect(0, 0, SW, SH);
+      var px = 12, py = SAFE_TOP, pw = SW - 24, ph = SH - SAFE_TOP - SAFE_BOT;
+      var bodyTop = py + 54, bodyBot = py + ph - 62;
+      ctx.fillStyle = "#151c31";
+      roundRect(px, py, pw, ph, 16); ctx.fill();
+      ctx.strokeStyle = "#334263"; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = "#f4f7ff";
+      ctx.font = "700 20px sans-serif";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("规则介绍", SW/2, py + 28);
+
+      var sections = [
+        {title:"胜利条件", lines:["激光命中对方国王即获胜。", "国王被己方激光命中同样判负。"]},
+        {title:"回合流程", lines:["每回合移动或旋转一枚己方棋子，", "随后发射激光；也可以直接发射。", "激光结算后轮到另一方行动。"]},
+        {title:"五种棋子", lines:["激光炮：固定在角落，可切换发射方向。", "国王：被任意激光命中即结束对局。", "盾牌：正面挡光，其他方向会被消除。", "单面镜：反射正面来光，背面会被消除。", "双面镜：双向反射来光，本身不会被消除。"]},
+        {title:"双面镜互换", lines:["双面镜可与相邻盾牌或单面镜互换，", "包括对方棋子。", "互换代替本回合的移动。"]},
+        {title:"双方禁区", lines:["蓝方不能进入红色区域；", "红方不能进入白色区域。", "互换时，双面镜与被换棋子的落点", "都必须符合双方禁区规则。"]},
+        {title:"三次重复", lines:["相同局面出现三次时，可以宣告平局。", "局面包含棋子位置、方向与当前行动方。"]}
+      ];
+      var contentH = 10;
+      for(var n=0;n<sections.length;n++) contentH += 27 + sections[n].lines.length*21 + 9;
+      rulesMaxScroll = Math.max(0, contentH - (bodyBot - bodyTop));
+      G.rulesScroll = Math.max(0, Math.min(rulesMaxScroll, G.rulesScroll));
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(px + 14, bodyTop, pw - 28, bodyBot - bodyTop);
+      ctx.clip();
+      var y = bodyTop + 10 - G.rulesScroll;
+      ctx.textAlign = "left"; ctx.textBaseline = "top";
+      for(var i=0;i<sections.length;i++){
+        ctx.fillStyle = "#6bc1ff";
+        ctx.font = "700 15px sans-serif";
+        ctx.fillText(sections[i].title, px + 20, y);
+        y += 27;
+        ctx.fillStyle = "#c5ccdc";
+        ctx.font = "13px sans-serif";
+        for(var j=0;j<sections[i].lines.length;j++){
+          ctx.fillText(sections[i].lines[j], px + 20, y);
+          y += 21;
+        }
+        y += 9;
+      }
+      ctx.restore();
+
+      BUTTONS = [{x:px + 20, y:py + ph - 52, w:pw - 40, h:40,
+        label:"关闭", fn:closeModal, style:"primary"}];
+      drawButton(BUTTONS[0]);
+    }
+
+    function drawConfirmReturnModal(){
+      ctx.fillStyle = "rgba(6,9,20,0.84)";
+      ctx.fillRect(0, 0, SW, SH);
+      var pw = Math.min(SW - 40, 340), ph = 220;
+      var px = (SW - pw) / 2, py = (SH - ph) / 2;
+      ctx.fillStyle = "#1a2138";
+      roundRect(px, py, pw, ph, 16); ctx.fill();
+      ctx.strokeStyle = "#4b5876"; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = "#f4f7ff";
+      ctx.font = "700 21px sans-serif";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("返回设置？", SW/2, py + 54);
+      ctx.fillStyle = "#ff9ba7";
+      ctx.font = "14px sans-serif";
+      ctx.fillText("返回后当前对局进度将丢失。", SW/2, py + 94);
+      var gap = 8, margin = 20, w = (pw - margin*2 - gap) / 2;
+      BUTTONS = [
+        {x:px+margin, y:py+ph-62, w:w, h:42,
+          label:"继续对局", fn:closeModal, style:"ghost"},
+        {x:px+margin+w+gap, y:py+ph-62, w:w, h:42,
+          label:"确认返回", fn:confirmReturnToSetup, style:"danger"}
+      ];
+      for(var i=0;i<BUTTONS.length;i++) drawButton(BUTTONS[i]);
+    }
+
     /* -------------------- 触摸：单指点击/拖动 + 双指旋转 -------------------- */
     // 单指轻点 = 点击棋子/按钮
     // 单指拖动（超过阈值）= 旋转视角（yaw/pitch）
     // 双指 = 旋转视角（yaw/pitch + 缩放）
-    var touchMode = "none"; // "none" | "click" | "camera" | "drag"
+    var touchMode = "none"; // "none" | "click" | "camera" | "drag" | "rules"
     var clickStart = { x:0, y:0 };
     var camGesture = { lastDist:0, lastMidY:0 };
     var lastDrag = { x:0, y:0 };
@@ -1925,6 +2065,16 @@ module.exports = {
     function handleTouchStart(e){
       try {
         var ts = _getTouches(e);
+        if(G.modal){
+          if(ts.length === 1){
+            touchMode = G.modal === "rules" ? "rules" : "click";
+            clickStart.x = ts[0].clientX;
+            clickStart.y = ts[0].clientY;
+            lastDrag.x = ts[0].clientX;
+            lastDrag.y = ts[0].clientY;
+          } else touchMode = "none";
+          return;
+        }
         if(ts.length >= 2){
           touchMode = "camera";
           var t1 = ts[0], t2 = ts[1];
@@ -1943,7 +2093,13 @@ module.exports = {
     function handleTouchMove(e){
       try {
         var ts = _getTouches(e);
-        if(touchMode === "camera" && ts.length >= 2){
+        if(touchMode === "rules" && ts.length === 1){
+          var rulesDy = ts[0].clientY - lastDrag.y;
+          G.rulesScroll = Math.max(0, Math.min(rulesMaxScroll, G.rulesScroll - rulesDy));
+          lastDrag.x = ts[0].clientX;
+          lastDrag.y = ts[0].clientY;
+          render();
+        } else if(touchMode === "camera" && ts.length >= 2){
           var t1 = ts[0], t2 = ts[1];
           var dist = Math.sqrt((t1.clientX-t2.clientX)*(t1.clientX-t2.clientX)+(t1.clientY-t2.clientY)*(t1.clientY-t2.clientY));
           var midY = (t1.clientY+t2.clientY)/2;
@@ -1992,6 +2148,16 @@ module.exports = {
       try {
         // 关键修复：直接检查 e.touches（当前屏幕上的活跃触摸点数量）
         var activeCount = (e && e.touches && e.touches.length) ? e.touches.length : 0;
+        if(activeCount === 0 && touchMode === "rules"){
+          touchMode = "none";
+          var ruleTouches = (e && e.changedTouches) ? e.changedTouches : [];
+          if(!ruleTouches.length) return;
+          var ruleTouch = ruleTouches[0];
+          var ruleMove = Math.sqrt((ruleTouch.clientX-clickStart.x)*(ruleTouch.clientX-clickStart.x)+
+            (ruleTouch.clientY-clickStart.y)*(ruleTouch.clientY-clickStart.y));
+          if(ruleMove <= 10) processClick(ruleTouch.clientX, ruleTouch.clientY);
+          return;
+        }
         if(activeCount === 0 && (touchMode === "click" || touchMode === "drag")){
           // 所有手指已抬起
           var wasDrag = (touchMode === "drag");
@@ -2022,6 +2188,7 @@ module.exports = {
 
     // 外部相机控制（供调试页面鼠标右键拖动使用）
     function externalCameraControl(dx, dy){
+      if(G.modal === "rules") return;
       cam.yaw += dx * 0.006;
       cam.pitch -= dy * 0.005;
       cam.pitch = Math.max(0.2, Math.min(1.5, cam.pitch));
@@ -2029,14 +2196,11 @@ module.exports = {
     }
 
     function processClick(x, y){
-      if(G.layoutPanel){ var b1 = hitButton(x,y); if(b1&&b1.fn) b1.fn(); return; }
-      if(G.modal){ var b2 = hitButton(x,y); if(b2&&b2.fn) b2.fn(); return; }
-      if(G.screen !== "playing") return;
-      if(G.over || G.busy){ var b3 = hitButton(x,y); if(b3&&b3.fn) b3.fn(); return; }
-      if(G.mode === "pve" && G.current === G.aiPlayer) return;
-
       var btn = hitButton(x, y);
       if(btn && btn.fn){ btn.fn(); return; }
+      if(G.modal || G.screen !== "playing") return;
+      if(G.over || G.busy) return;
+      if(G.mode === "pve" && G.current === G.aiPlayer) return;
 
       var ob = hitOnBoard3D(x, y);
       if(ob && ob.fn){ ob.fn(); return; }

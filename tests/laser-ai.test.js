@@ -5,7 +5,10 @@ var LaserGame = require("../games/laser/laser-game.js");
 
 function fakeContext(){
   var gradient = { addColorStop:function(){} };
+  var texts = [];
   return new Proxy({
+    _texts:texts,
+    fillText:function(text){ texts.push(text); },
     measureText:function(s){ return {width:String(s).length * 8}; },
     createLinearGradient:function(){ return gradient; },
     createRadialGradient:function(){ return gradient; }
@@ -78,6 +81,56 @@ assert.equal(returned.layoutIdx, 2);
 assert.equal(returned.difficulty, "easy");
 assert.deepEqual(returned.pieces, game._debugAI.initialPieces(2));
 
+var uiCtx = fakeContext();
+var uiGame = LaserGame.create(uiCtx, 375, 667, function(){});
+uiGame.render();
+assert.ok(uiCtx._texts.indexOf("选择阵型") >= 0);
+assert.ok(uiCtx._texts.indexOf("选择难度") >= 0);
+assert.ok(uiCtx._texts.indexOf("规则介绍") >= 0);
+assert.ok(uiCtx._texts.indexOf("开始游戏") >= 0);
+assert.equal(uiGame._debugGame.snapshot().screen, "setup");
+
+uiGame._debugGame.openRules();
+uiGame.onTouchStart({touches:[{clientX:188, clientY:450}]});
+uiGame.onTouchMove({touches:[{clientX:188, clientY:250}]});
+assert.ok(uiGame._debugGame.snapshot().rulesScroll > 0,
+  "rules drag must scroll the clipped body");
+uiGame.onTouchEnd({touches:[], changedTouches:[{clientX:188, clientY:250}]});
+uiCtx._texts.length = 0;
+uiGame.render();
+assert.ok(uiCtx._texts.indexOf("双面镜互换") >= 0);
+assert.ok(uiCtx._texts.some(function(text){
+  return text.indexOf("包括对方棋子") >= 0;
+}));
+assert.ok(uiCtx._texts.some(function(text){
+  return text.indexOf("蓝方不能进入红色区域") >= 0;
+}));
+
+uiGame._debugGame.closeModal();
+uiGame._debugGame.beginMatch();
+uiCtx._texts.length = 0;
+uiGame.render();
+assert.equal(uiCtx._texts.indexOf("选择难度"), -1);
+assert.equal(uiCtx._texts.indexOf("阵型选择"), -1);
+assert.ok(uiCtx._texts.indexOf("返回设置") >= 0);
+
+uiGame._debugGame.requestReturn();
+uiCtx._texts.length = 0;
+uiGame.render();
+assert.ok(uiCtx._texts.some(function(text){
+  return text.indexOf("当前对局进度将丢失") >= 0;
+}));
+uiGame.exit();
+
+var startCtx = fakeContext();
+var startGame = LaserGame.create(startCtx, 375, 667, function(){});
+var startTouch = {clientX:280, clientY:565};
+startGame.onTouchStart({touches:[startTouch]});
+startGame.onTouchEnd({touches:[], changedTouches:[startTouch]});
+assert.equal(startGame._debugGame.snapshot().screen, "playing",
+  "the production start button must begin the default match");
+startGame.exit();
+
 var safePressure = [
   piece("bl", "laser", 1, 0, 0, 2),
   piece("bm", "mirror", 1, 3, 0, 0),
@@ -145,16 +198,6 @@ try {
     return (action.kind === "move" && action.r === 4 && action.c === 0) ||
       (action.kind === "swap" && action.ti === 1);
   }), "red pieces must not move or swap into a blue reserved cell");
-
-  game._debugGame.selectDifficulty("normal");
-  assert.equal(game._debugAI.getDifficulty(), "normal");
-  game._debugAI.cycleDifficulty();
-  assert.equal(game._debugAI.getDifficulty(), "hard");
-  game._debugAI.cycleDifficulty();
-  assert.equal(game._debugAI.getDifficulty(), "easy");
-  game._debugAI.restart();
-  assert.equal(game._debugAI.getDifficulty(), "easy",
-    "restart must preserve the selected difficulty");
 
   for(var layoutIndex = 0; layoutIndex < 5; layoutIndex++){
     var started = Date.now();
