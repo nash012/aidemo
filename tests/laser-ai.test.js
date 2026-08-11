@@ -90,6 +90,15 @@ try {
     return (action.kind === "move" && action.r === 4 && action.c === 0) ||
       (action.kind === "swap" && action.ti === 1);
   }), "red pieces must not move or swap into a blue reserved cell");
+
+  assert.equal(game._debugAI.getDifficulty(), "normal");
+  game._debugAI.cycleDifficulty();
+  assert.equal(game._debugAI.getDifficulty(), "hard");
+  game._debugAI.cycleDifficulty();
+  assert.equal(game._debugAI.getDifficulty(), "easy");
+  game._debugAI.restart();
+  assert.equal(game._debugAI.getDifficulty(), "easy",
+    "restart must preserve the selected difficulty");
 } finally {
   Math.random = savedRandom;
   game.exit();

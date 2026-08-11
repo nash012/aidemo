@@ -408,8 +408,11 @@ module.exports = {
     }
 
     /* -------------------- 游戏状态 -------------------- */
+    var DIFFICULTY_ORDER = ["easy", "normal", "hard"];
+    var DIFFICULTY_LABEL = {easy:"简单", normal:"普通", hard:"困难"};
     var G = {
       pieces:[], current:0, phase:"select", sel:-1, mode:"pve", aiPlayer:1,
+      difficulty:"normal",
       path:null, animT:0, over:false, winner:-1, busy:false,
       history:{}, drawOffer:false, modal:null, flashN:0, flashPiece:null,
       eliminated:null, layoutIdx:0, layoutPanel:false, undoSnapshot:null,
@@ -424,6 +427,11 @@ module.exports = {
       G.flashN=0; G.flashPiece=null; G.eliminated=null;
       G.layoutPanel=false; G.undoSnapshot=null;
       G.particles=[]; G.particleT=0;
+      render();
+    }
+    function cycleDifficulty(){
+      var i = DIFFICULTY_ORDER.indexOf(G.difficulty);
+      G.difficulty = DIFFICULTY_ORDER[(i + 1) % DIFFICULTY_ORDER.length];
       render();
     }
     function signature(){
@@ -1543,6 +1551,7 @@ module.exports = {
           addBtn("\u26A1 直接发射", directFire, "primary");
         }
         addBtn("阵型选择", function(){ G.layoutPanel = true; render(); }, "ghost");
+        addBtn("难度：" + DIFFICULTY_LABEL[G.difficulty], cycleDifficulty, "ghost");
         addBtn("重开", startGame, "danger");
         addBtn("重置视角", resetView, "ghost");
       }
@@ -1708,7 +1717,7 @@ module.exports = {
       G.busy = true; render();
       _setTrackTimeout(function(){
         var act;
-        try { act = aiChoose(G.pieces, G.aiPlayer); }
+        try { act = aiChoose(G.pieces, G.aiPlayer, G.difficulty); }
         catch(e) { G.busy = false; endTurn(); return; }
         G.busy = false;
         applyAiAction(act);
@@ -1991,7 +2000,10 @@ module.exports = {
         choose: function(pieces, player, level){ return aiChoose(pieces, player, level); },
         actions: function(pieces, player){ return generateActions(pieces, player); },
         resolve: function(pieces, player, action){ return resolveTurn(pieces, player, action); },
-        initialPieces: function(layoutIndex){ return makeInitialPieces(layoutIndex); }
+        initialPieces: function(layoutIndex){ return makeInitialPieces(layoutIndex); },
+        getDifficulty: function(){ return G.difficulty; },
+        cycleDifficulty: cycleDifficulty,
+        restart: startGame
       },
       exit: function(){
         for(var i=0;i<_timeouts.length;i++) clearTimeout(_timeouts[i]);
