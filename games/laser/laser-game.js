@@ -2467,12 +2467,12 @@ module.exports = {
         snapshot: function(){ return {
           pieces:G.pieces.map(copySnapshotValue),
           aiAnim:copySnapshotValue(G.aiAnim),
-          actionNotice:G.actionNotice, busy:G.busy, phase:G.phase
+          actionNotice:G.actionNotice, busy:G.busy, phase:G.phase,
+          timeoutCount:_timeouts.length
         }; }
       },
       exit: function(){
-        for(var i=0;i<_timeouts.length;i++) clearTimeout(_timeouts[i]);
-        _timeouts = [];
+        clearMatchVisualState();
       }
     };
   }

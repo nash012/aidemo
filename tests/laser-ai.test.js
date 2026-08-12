@@ -274,7 +274,12 @@ try {
   assert.equal(swapCtx._arcs.filter(function(arc){
     return arc.strokeStyle === "rgba(255,225,77,0.95)";
   }).length, 2, "swap lead-in must highlight both pieces");
-  swapGame.update(0.79);
+  swapCtx._arcs.length = 0;
+  swapGame.update(0.70);
+  assert.equal(swapCtx._arcs.filter(function(arc){
+    return arc.strokeStyle.indexOf("rgba(255,225,77,") === 0;
+  }).length, 2, "swap landing must pulse both destinations");
+  swapGame.update(0.09);
   assert.deepEqual(swapGame._debugGame.snapshot().pieces, animatedSwap,
     "swap must keep both rule positions unchanged during animation");
   swapGame.update(0.02);
@@ -305,6 +310,24 @@ try {
     "an animation creation failure must continue immediately to laser fire");
   assert.equal(recovered.busy, true);
   invalidGame.exit();
+
+  var exitGame = LaserGame.create(fakeContext(), 375, 667, function(){});
+  exitGame._debugGame.beginMatch();
+  var exitPieces = exitGame._debugGame.snapshot().pieces;
+  exitGame._debugEffects.beginAiAction({pi:14, kind:"move", r:5, c:7});
+  exitGame.exit();
+  var exited = exitGame._debugEffects.snapshot();
+  assert.equal(exited.aiAnim, null, "exit must clear a pending AI animation");
+  assert.equal(exited.actionNotice, null, "exit must clear the AI action notice");
+  assert.equal(exited.timeoutCount, 0, "exit must clear tracked timers");
+  exitGame.update(1);
+  var afterExitUpdate = exitGame._debugEffects.snapshot();
+  assert.deepEqual(afterExitUpdate.pieces, exitPieces,
+    "update after exit must not commit the pending action");
+  assert.equal(afterExitUpdate.aiAnim, null);
+  assert.equal(afterExitUpdate.actionNotice, null);
+  assert.equal(afterExitUpdate.timeoutCount, 0,
+    "update after exit must not create a timer");
 
   for(var levelIndex = 0; levelIndex < 3; levelIndex++){
     var level = ["easy", "normal", "hard"][levelIndex];
