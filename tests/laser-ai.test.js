@@ -27,6 +27,22 @@ function piece(id, type, owner, row, col, orientation){
     orientation:orientation, alive:true};
 }
 
+function touch(game, point){
+  game.onTouchStart({touches:[point]});
+  game.onTouchEnd({touches:[], changedTouches:[point]});
+}
+
+function matchCellPoint(row, col){
+  var pitch = 0.95;
+  var z = -(row - 3.5);
+  var depth = z * Math.cos(pitch) + 15;
+  var scale = 461.25 / depth;
+  return {
+    clientX:(col - 4.5) * scale + 187.5,
+    clientY:-z * Math.sin(pitch) * scale + 306.5
+  };
+}
+
 function testAiAnimation(action, beforeSeconds, advanceSeconds, expected){
   var animCtx = fakeContext();
   var animGame = LaserGame.create(animCtx, 375, 667, function(){});
@@ -93,7 +109,11 @@ var glowWidths = beamCtx._strokes.filter(function(stroke){
 assert.ok(glowWidths.length > 0, "beam render must draw an orange glow");
 assert.ok(glowWidths.every(function(width){ return width >= 4 && width <= 6; }),
   "orange glow width must remain within 4–6px after its pulse");
+assert.ok(beamGame._debugEffects.snapshot().timeoutCount > 0,
+  "beam travel must use a tracked timer");
 beamGame.exit();
+assert.equal(beamGame._debugEffects.snapshot().timeoutCount, 0,
+  "exit must clear beam travel timers");
 
 var initial = game._debugGame.snapshot();
 assert.equal(initial.screen, "setup");
@@ -112,6 +132,22 @@ for(var previewLayout = 0; previewLayout < 5; previewLayout++){
     "setup preview must use the real layout " + previewLayout
   );
 }
+
+["easy", "normal", "hard"].forEach(function(level){
+  for(var layoutIndex = 0; layoutIndex < 5; layoutIndex++){
+    var setupGame = LaserGame.create(fakeContext(), 375, 667, function(){});
+    setupGame._debugGame.selectLayout(layoutIndex);
+    setupGame._debugGame.selectDifficulty(level);
+    var preview = setupGame._debugGame.snapshot().pieces;
+    setupGame._debugGame.beginMatch();
+    var match = setupGame._debugGame.snapshot();
+    assert.equal(match.lockedLayoutIdx, layoutIndex);
+    assert.equal(match.lockedDifficulty, level);
+    assert.deepEqual(match.pieces, preview,
+      level + " layout " + layoutIndex + " must start from its exact preview");
+    setupGame.exit();
+  }
+});
 
 game._debugGame.selectLayout(2);
 game._debugGame.selectDifficulty("easy");
@@ -132,11 +168,16 @@ var stillLocked = game._debugGame.snapshot();
 assert.equal(stillLocked.layoutIdx, 2, "layout is immutable during play");
 assert.equal(stillLocked.difficulty, "easy", "difficulty is immutable during play");
 
+var progressedPieces = startedMatch.pieces.map(function(p){
+  return Object.assign({}, p);
+});
+progressedPieces[0].row = 6;
+game._debugEffects.setPieces(progressedPieces);
 game._debugGame.requestReturn();
 assert.equal(game._debugGame.snapshot().modal, "confirmReturn");
 game._debugGame.closeModal();
 assert.equal(game._debugGame.snapshot().screen, "playing");
-assert.deepEqual(game._debugGame.snapshot().pieces, startedMatch.pieces,
+assert.deepEqual(game._debugGame.snapshot().pieces, progressedPieces,
   "cancelling return preserves match progress");
 
 game._debugGame.requestReturn();
@@ -267,6 +308,14 @@ try {
     return action.kind === "swap" && action.pi === 0 && action.ti === 1;
   }), "switch must be able to swap with an adjacent opponent mirror");
 
+  var crossOwnerShieldSwap = [
+    piece("bs", "switch", 1, 4, 4, 0),
+    piece("rs", "shield", 0, 4, 5, 0)
+  ];
+  assert.ok(game._debugAI.actions(crossOwnerShieldSwap, 1).some(function(action){
+    return action.kind === "swap" && action.pi === 0 && action.ti === 1;
+  }), "switch must be able to swap with an adjacent opponent shield");
+
   var blueByRedZone = [
     piece("bs", "switch", 1, 4, 8, 0),
     piece("rm", "mirror", 0, 4, 9, 0)
@@ -285,6 +334,22 @@ try {
       (action.kind === "swap" && action.ti === 1);
   }), "red pieces must not move or swap into a blue reserved cell");
 
+  var redTargetByBlueZone = [
+    piece("bs", "switch", 1, 4, 0, 0),
+    piece("rm", "mirror", 0, 4, 1, 0)
+  ];
+  assert.ok(!game._debugAI.actions(redTargetByBlueZone, 1).some(function(action){
+    return action.kind === "swap" && action.ti === 1;
+  }), "swap must be rejected when the red target would land in a blue reserved cell");
+
+  var blueTargetByRedZone = [
+    piece("rs", "switch", 0, 4, 9, 0),
+    piece("bm", "mirror", 1, 4, 8, 0)
+  ];
+  assert.ok(!game._debugAI.actions(blueTargetByRedZone, 0).some(function(action){
+    return action.kind === "swap" && action.ti === 1;
+  }), "swap must be rejected when the blue target would land in a red reserved cell");
+
   testAiAnimation({pi:14, kind:"move", r:5, c:7}, 0.73, 0.75, function(snap, ctx){
     assert.equal(snap.pieces[14].row, 5);
     assert.equal(snap.pieces[14].col, 7);
@@ -302,6 +367,24 @@ try {
   testAiAnimation({pi:25, kind:"laserRot", dir:1}, 0.67, 0.70, function(snap){
     assert.equal(snap.pieces[25].orientation, 1);
   });
+
+  var blockedGame = LaserGame.create(fakeContext(), 375, 667, function(){});
+  blockedGame._debugGame.beginMatch();
+  var blockedPieces = blockedGame._debugGame.snapshot().pieces;
+  blockedGame._debugEffects.beginAiAction({pi:14, kind:"move", r:5, c:7});
+  touch(blockedGame, matchCellPoint(7, 5));
+  assert.deepEqual(blockedGame._debugGame.snapshot().pieces, blockedPieces,
+    "player touch must not change pieces during AI motion");
+  assert.equal(blockedGame._debugGame.snapshot().sel, -1,
+    "player touch must not select a piece during AI motion");
+  blockedGame.update(0.75);
+  var beamState = blockedGame._debugGame.snapshot();
+  touch(blockedGame, matchCellPoint(7, 5));
+  assert.deepEqual(blockedGame._debugGame.snapshot().pieces, beamState.pieces,
+    "player touch must not change pieces during beam travel");
+  assert.equal(blockedGame._debugGame.snapshot().phase, "anim");
+  assert.equal(blockedGame._debugGame.snapshot().sel, -1);
+  blockedGame.exit();
 
   var animatedSwap = [
     piece("bs", "switch", 1, 4, 4, 0),
@@ -371,6 +454,52 @@ try {
   assert.equal(afterExitUpdate.actionNotice, null);
   assert.equal(afterExitUpdate.timeoutCount, 0,
     "update after exit must not create a timer");
+
+  var savedSetTimeout = global.setTimeout;
+  var savedClearTimeout = global.clearTimeout;
+  var savedNow = Date.now;
+  var pendingTimers = [];
+  var nextTimerId = 1;
+  var fakeNow = 1000;
+  global.setTimeout = function(fn){
+    var id = nextTimerId++;
+    pendingTimers.push({id:id, fn:fn});
+    return id;
+  };
+  global.clearTimeout = function(id){
+    pendingTimers = pendingTimers.filter(function(timer){ return timer.id !== id; });
+  };
+  Date.now = function(){ return fakeNow; };
+  try {
+    var thinkingGame = LaserGame.create(fakeContext(), 375, 667, function(){});
+    thinkingGame._debugGame.beginMatch();
+    touch(thinkingGame, {clientX:53, clientY:557});
+    assert.equal(thinkingGame._debugGame.snapshot().phase, "anim");
+    assert.equal(thinkingGame._debugGame.snapshot().busy, true);
+    touch(thinkingGame, matchCellPoint(7, 5));
+    assert.equal(thinkingGame._debugGame.snapshot().sel, -1,
+      "player touch must not select a piece during human beam travel");
+
+    fakeNow += 10000;
+    pendingTimers.shift().fn();
+    pendingTimers.shift().fn();
+    pendingTimers.shift().fn();
+    var thinking = thinkingGame._debugGame.snapshot();
+    assert.equal(thinking.current, 1);
+    assert.equal(thinking.busy, true);
+    assert.ok(thinkingGame._debugEffects.snapshot().timeoutCount > 0,
+      "AI thinking must use a tracked timer");
+    touch(thinkingGame, matchCellPoint(0, 6));
+    assert.equal(thinkingGame._debugGame.snapshot().sel, -1,
+      "player touch must not select a piece during AI thinking");
+    thinkingGame.exit();
+    assert.equal(thinkingGame._debugEffects.snapshot().timeoutCount, 0,
+      "exit must clear AI thinking timers");
+  } finally {
+    global.setTimeout = savedSetTimeout;
+    global.clearTimeout = savedClearTimeout;
+    Date.now = savedNow;
+  }
 
   for(var levelIndex = 0; levelIndex < 3; levelIndex++){
     var level = ["easy", "normal", "hard"][levelIndex];
