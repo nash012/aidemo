@@ -425,7 +425,7 @@ module.exports = {
       rulesScroll:0, aiAnim:null, actionNotice:null,
       path:null, animT:0, beamPulseT:0, over:false, winner:-1, busy:false,
       history:{}, drawOffer:false, modal:null, flashN:0, flashPiece:null,
-      eliminated:null, layoutIdx:0, layoutPanel:false, undoSnapshot:null,
+      eliminated:null, layoutIdx:0, undoSnapshot:null,
       particles:[], particleT:0
     };
 
@@ -444,7 +444,7 @@ module.exports = {
       G.current=0; G.phase="select"; G.sel=-1;
       G.over=false; G.winner=-1; G.busy=false;
       G.history={}; G.drawOffer=false; G.modal=null;
-      G.layoutPanel=false; G.undoSnapshot=null;
+      G.undoSnapshot=null;
     }
 
     function setSetupCamera(){
@@ -482,7 +482,6 @@ module.exports = {
       G.pieces = makeInitialPieces(G.layoutIdx);
       G.current=0; G.phase="select"; G.over=false; G.winner=-1;
       G.history={}; G.drawOffer=false; G.modal=null; G.busy=false;
-      G.layoutPanel=false;
       setSetupCamera();
       render();
     }
@@ -497,11 +496,6 @@ module.exports = {
       render();
     }
 
-    function startGame(){
-      if(G.screen === "playing") restartMatch();
-      else enterSetup();
-    }
-
     function restartMatch(){
       if(G.screen !== "playing") return;
       resetMatchState(makeInitialPieces(G.lockedLayoutIdx));
@@ -513,6 +507,7 @@ module.exports = {
       if(G.screen !== "setup" || typeof index !== "number" || index % 1 !== 0 || index < 0 || index >= LAYOUTS.length) return;
       G.layoutIdx = index;
       G.pieces = makeInitialPieces(index);
+      setSetupCamera();
       render();
     }
 
@@ -559,10 +554,6 @@ module.exports = {
       return copy;
     }
 
-    function cycleDifficulty(){
-      var i = DIFFICULTY_ORDER.indexOf(G.difficulty);
-      selectDifficulty(DIFFICULTY_ORDER[(i + 1) % DIFFICULTY_ORDER.length]);
-    }
     function signature(){
       var arr = [];
       for(var i=0;i<G.pieces.length;i++){
@@ -1832,7 +1823,7 @@ module.exports = {
         if(!(G.mode==="pve" && G.current===G.aiPlayer)){
           addBtn("\u26A1 直接发射", directFire, "primary");
         }
-        addBtn("重开", startGame, "danger");
+        addBtn("重开", restartMatch, "danger");
         addBtn("返回设置", requestReturnToSetup, "ghost");
         addBtn("重置视角", resetView, "ghost");
       }
@@ -2281,7 +2272,7 @@ module.exports = {
           } else touchMode = "none";
           return;
         }
-        if(ts.length >= 2){
+        if(G.screen === "playing" && ts.length >= 2){
           touchMode = "camera";
           var t1 = ts[0], t2 = ts[1];
           camGesture.lastDist = Math.sqrt((t1.clientX-t2.clientX)*(t1.clientX-t2.clientX)+(t1.clientY-t2.clientY)*(t1.clientY-t2.clientY));
@@ -2305,7 +2296,7 @@ module.exports = {
           lastDrag.x = ts[0].clientX;
           lastDrag.y = ts[0].clientY;
           render();
-        } else if(touchMode === "camera" && ts.length >= 2){
+        } else if(G.screen === "playing" && touchMode === "camera" && ts.length >= 2){
           var t1 = ts[0], t2 = ts[1];
           var dist = Math.sqrt((t1.clientX-t2.clientX)*(t1.clientX-t2.clientX)+(t1.clientY-t2.clientY)*(t1.clientY-t2.clientY));
           var midY = (t1.clientY+t2.clientY)/2;
@@ -2333,10 +2324,10 @@ module.exports = {
           var dx = ts[0].clientX - lastDrag.x;
           var dy = ts[0].clientY - lastDrag.y;
           var moveDist = Math.sqrt(dx*dx + dy*dy);
-          if(moveDist > DRAG_THRESHOLD){
+          if(G.screen === "playing" && moveDist > DRAG_THRESHOLD){
             touchMode = "drag";
           }
-        } else if(touchMode === "drag" && ts.length === 1){
+        } else if(G.screen === "playing" && touchMode === "drag" && ts.length === 1){
           // 单指拖动：旋转相机
           var ddx = ts[0].clientX - lastDrag.x;
           var ddy = ts[0].clientY - lastDrag.y;
@@ -2394,7 +2385,7 @@ module.exports = {
 
     // 外部相机控制（供调试页面鼠标右键拖动使用）
     function externalCameraControl(dx, dy){
-      if(G.modal === "rules") return;
+      if(G.screen !== "playing" || G.modal === "rules") return;
       cam.yaw += dx * 0.006;
       cam.pitch -= dy * 0.005;
       cam.pitch = Math.max(0.2, Math.min(1.5, cam.pitch));
@@ -2484,9 +2475,7 @@ module.exports = {
         actions: function(pieces, player){ return generateActions(pieces, player); },
         resolve: function(pieces, player, action){ return resolveTurn(pieces, player, action); },
         initialPieces: function(layoutIndex){ return makeInitialPieces(layoutIndex); },
-        getDifficulty: function(){ return G.difficulty; },
-        cycleDifficulty: cycleDifficulty,
-        restart: startGame
+        getDifficulty: function(){ return G.difficulty; }
       },
       _debugGame: {
         snapshot: function(){
@@ -2496,7 +2485,8 @@ module.exports = {
             rulesScroll:G.rulesScroll, modal:G.modal, busy:G.busy, actionNotice:G.actionNotice,
             current:G.current, phase:G.phase, sel:G.sel, mode:G.mode, aiPlayer:G.aiPlayer,
             animT:G.animT, over:G.over, winner:G.winner, drawOffer:G.drawOffer,
-            flashN:G.flashN, layoutPanel:G.layoutPanel, particleT:G.particleT,
+            flashN:G.flashN, particleT:G.particleT,
+            camera:{yaw:cam.yaw, pitch:cam.pitch},
             pieces:G.pieces.map(copySnapshotValue),
             aiAnim:copySnapshotValue(G.aiAnim)
           };

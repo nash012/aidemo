@@ -120,9 +120,88 @@ assert.equal(initial.screen, "setup");
 assert.equal(initial.layoutIdx, 0);
 assert.equal(initial.difficulty, "normal");
 assert.deepEqual(initial.pieces, game._debugAI.initialPieces(0));
+assert.deepEqual(initial.camera, {
+  yaw:0, pitch:1.08
+}, "setup must expose its fixed shallow camera");
 initial.pieces[0].row = -1;
 assert.deepEqual(game._debugGame.snapshot().pieces, game._debugAI.initialPieces(0),
   "snapshot must not expose mutable game pieces");
+
+var setupCamera = game._debugGame.snapshot().camera;
+game.onTouchStart({touches:[{clientX:100, clientY:100}]});
+game.onTouchMove({touches:[{clientX:120, clientY:100}]});
+game.onTouchMove({touches:[{clientX:150, clientY:130}]});
+game.onTouchEnd({touches:[], changedTouches:[{clientX:150, clientY:130}]});
+assert.deepEqual(game._debugGame.snapshot().camera, setupCamera,
+  "single-finger setup drag must not rotate the preview camera");
+
+game.onTouchStart({touches:[
+  {clientX:100, clientY:100}, {clientX:200, clientY:100}
+]});
+game.onTouchMove({touches:[
+  {clientX:80, clientY:120}, {clientX:220, clientY:120}
+]});
+game.onTouchEnd({touches:[], changedTouches:[
+  {clientX:80, clientY:120}, {clientX:220, clientY:120}
+]});
+assert.deepEqual(game._debugGame.snapshot().camera, setupCamera,
+  "two-finger setup gestures must not rotate the preview camera");
+
+game.cameraControl(40, 30);
+assert.deepEqual(game._debugGame.snapshot().camera, setupCamera,
+  "external camera control must not rotate the setup preview");
+game._debugGame.selectLayout(1);
+assert.deepEqual(game._debugGame.snapshot().camera, setupCamera,
+  "switching setup layout must restore the fixed preview camera");
+
+game._debugGame.selectLayout(2);
+game._debugGame.selectDifficulty("easy");
+var validSetup = game._debugGame.snapshot();
+[-1, 5, 1.5].forEach(function(invalidLayout){
+  game._debugGame.selectLayout(invalidLayout);
+  var afterInvalidLayout = game._debugGame.snapshot();
+  assert.equal(afterInvalidLayout.layoutIdx, validSetup.layoutIdx,
+    "invalid layout must preserve selection: " + invalidLayout);
+  assert.equal(afterInvalidLayout.difficulty, validSetup.difficulty,
+    "invalid layout must preserve difficulty: " + invalidLayout);
+  assert.deepEqual(afterInvalidLayout.pieces, validSetup.pieces,
+    "invalid layout must preserve preview: " + invalidLayout);
+});
+game._debugGame.selectDifficulty("unknown");
+var afterInvalidDifficulty = game._debugGame.snapshot();
+assert.equal(afterInvalidDifficulty.layoutIdx, validSetup.layoutIdx,
+  "unknown difficulty must preserve layout");
+assert.equal(afterInvalidDifficulty.difficulty, validSetup.difficulty,
+  "unknown difficulty must preserve selection");
+assert.deepEqual(afterInvalidDifficulty.pieces, validSetup.pieces,
+  "unknown difficulty must preserve preview");
+
+var cameraGame = LaserGame.create(fakeContext(), 375, 667, function(){});
+cameraGame._debugGame.beginMatch();
+var matchCamera = cameraGame._debugGame.snapshot().camera;
+cameraGame.cameraControl(40, 30);
+assert.notDeepEqual(cameraGame._debugGame.snapshot().camera, matchCamera,
+  "external camera control must remain active during play");
+matchCamera = cameraGame._debugGame.snapshot().camera;
+cameraGame.onTouchStart({touches:[{clientX:100, clientY:100}]});
+cameraGame.onTouchMove({touches:[{clientX:120, clientY:100}]});
+cameraGame.onTouchMove({touches:[{clientX:150, clientY:130}]});
+cameraGame.onTouchEnd({touches:[], changedTouches:[{clientX:150, clientY:130}]});
+assert.notDeepEqual(cameraGame._debugGame.snapshot().camera, matchCamera,
+  "single-finger camera drag must remain active during play");
+matchCamera = cameraGame._debugGame.snapshot().camera;
+cameraGame.onTouchStart({touches:[
+  {clientX:100, clientY:100}, {clientX:200, clientY:100}
+]});
+cameraGame.onTouchMove({touches:[
+  {clientX:80, clientY:120}, {clientX:220, clientY:120}
+]});
+cameraGame.onTouchEnd({touches:[], changedTouches:[
+  {clientX:80, clientY:120}, {clientX:220, clientY:120}
+]});
+assert.notDeepEqual(cameraGame._debugGame.snapshot().camera, matchCamera,
+  "two-finger camera gestures must remain active during play");
+cameraGame.exit();
 
 for(var previewLayout = 0; previewLayout < 5; previewLayout++){
   game._debugGame.selectLayout(previewLayout);
