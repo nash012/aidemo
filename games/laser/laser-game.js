@@ -42,9 +42,9 @@ module.exports = {
     var LASER = "laser", KING = "king", SHIELD = "shield", MIRROR = "mirror", SWITCH = "switch";
     var PIECE_VAL = { king:10000, shield:3, switch:4, mirror:2, laser:0 };
     var AI_LEVELS = {
-      easy:   {attack:0.65, defense:1.25, guard:1.7, reply:0,    candidates:24, variety:5},
-      normal: {attack:2.0,  defense:0.9,  guard:0.8, reply:0.55, candidates:40, variety:1.5},
-      hard:   {attack:1.2,  defense:1.2, guard:1.5, reply:1.0, candidates:40, variety:0.5}
+      easy:   {attack:0.65, defense:1.25, guard:1.7, reply:0,    candidates:24, variety:5,   depth:1},
+      normal: {attack:2.0,  defense:0.9,  guard:0.8, reply:0.55, candidates:40, variety:1.5, depth:2},
+      hard:   {attack:1.2,  defense:1.2, guard:1.5, reply:1.0, candidates:40, variety:0.5, depth:3}
     };
     var MIRROR_MAP = [ {1:0,2:3}, {3:0,2:1}, {3:2,0:1}, {1:2,0:3} ];
     var SW_SLASH = {1:0,0:1,3:2,2:3};
@@ -275,61 +275,139 @@ module.exports = {
       }
       return score;
     }
+    /* -------------------- Alpha-Beta 搜索 -------------------- */
+    var AB_CHILD_LIMIT = 30; // 非根节点候选上限（控制搜索复杂度）
+
+    function alphaBeta(pieces, depth, alpha, beta, player, difficulty){
+      var opp = 1 - player;
+      // 终局检测
+      var myKing = findKing(pieces, player);
+      var oppKing = findKing(pieces, opp);
+      if(!myKing) return -100000 - depth;
+      if(!oppKing) return 100000 + depth;
+      if(depth === 0){
+        return evaluatePosition(pieces, player, difficulty);
+      }
+      var acts = allActions(pieces, player);
+      // 走法排序：快速评估用于提升剪枝效率
+      var scored = [];
+      for(var i=0;i<acts.length;i++){
+        var a = acts[i];
+        var res = resolveTurn(pieces, player, a);
+        var s, suicide = false, kingKill = false;
+        if(res.eliminated && res.eliminated.type === KING){
+          if(res.eliminated.owner === player){
+            s = -100000 - depth; suicide = true;
+          } else {
+            s = 100000 + depth; kingKill = true;
+          }
+        } else {
+          s = evaluatePosition(res.np, player, difficulty);
+          if(res.eliminated){
+            s += (res.eliminated.owner === player ? -PIECE_VAL[res.eliminated.type] : PIECE_VAL[res.eliminated.type]) * 4;
+          }
+        }
+        scored.push({res:res, s:s, suicide:suicide, kingKill:kingKill});
+      }
+      scored.sort(function(x,y){ return y.s - x.s; });
+      var limit = Math.min(scored.length, AB_CHILD_LIMIT);
+      var best = -Infinity;
+      for(var j=0;j<limit;j++){
+        var c = scored[j];
+        if(c.suicide) continue;
+        var val;
+        if(c.kingKill){
+          val = 100000 + depth;
+        } else {
+          val = -alphaBeta(c.res.np, depth - 1, -beta, -alpha, opp, difficulty);
+        }
+        if(val > best) best = val;
+        if(val > alpha) alpha = val;
+        if(alpha >= beta) break;
+      }
+      if(best === -Infinity){
+        best = evaluatePosition(pieces, player, difficulty);
+      }
+      return best;
+    }
+
     function aiChoose(pieces, aiPlayer, difficulty){
       difficulty = AI_LEVELS[difficulty] ? difficulty : "normal";
       var cfg = AI_LEVELS[difficulty];
       var opp = 1 - aiPlayer;
-      var acts = allActions(pieces, aiPlayer);
-      var scored = acts.map(function(a){
-        var s = 0, win = false, suicide = false;
-        var res = resolveTurn(pieces, aiPlayer, a);
-        if(res.eliminated){
-          var e = res.eliminated;
-          if(e.type===KING){
-            if(e.owner===aiPlayer){ s=-100000; suicide=true; }
-            else { s=100000; win=true; }
-          } else {
-            s += (e.owner===aiPlayer ? -PIECE_VAL[e.type] : PIECE_VAL[e.type]) * 4;
-          }
-        }
-        if(!win && !suicide) s += evaluatePosition(res.np, aiPlayer, difficulty);
-        return { a:a, s:s, win:win, suicide:suicide, res:res };
-      });
-      var wins = scored.filter(function(x){ return x.win; });
-      if(wins.length) return wins[Math.floor(Math.random()*wins.length)].a;
-      var safe = scored.filter(function(x){ return !x.suicide; });
-      var pool = safe.length ? safe : scored;
-      pool.sort(function(x,y){ return y.s - x.s; });
-      var top = pool.slice(0, cfg.candidates);
-      var finalList = [];
-      for(var i=0;i<top.length;i++){
-        var x = top[i];
-        var s = x.s;
-        if(cfg.reply>0 && s<50000){
-          var oppActs = allActions(x.res.np, opp);
-          var worstReply = Infinity, oppKillKing = false;
-          for(var j=0;j<oppActs.length;j++){
-            var oppRes = resolveTurn(x.res.np, opp, oppActs[j]);
-            var replyScore = evaluatePosition(oppRes.np, aiPlayer, difficulty);
-            if(oppRes.eliminated){
-              var e2 = oppRes.eliminated;
-              if(e2.type===KING){
-                if(e2.owner===aiPlayer){ oppKillKing=true; replyScore=-100000; }
-                else replyScore=100000;
-              }
+      // easy: 保持原有 1-ply 随机逻辑
+      if(difficulty === "easy"){
+        var acts0 = allActions(pieces, aiPlayer);
+        var scored0 = acts0.map(function(a){
+          var s = 0, win = false, suicide = false;
+          var res = resolveTurn(pieces, aiPlayer, a);
+          if(res.eliminated){
+            var e = res.eliminated;
+            if(e.type===KING){
+              if(e.owner===aiPlayer){ s=-100000; suicide=true; }
+              else { s=100000; win=true; }
+            } else {
+              s += (e.owner===aiPlayer ? -PIECE_VAL[e.type] : PIECE_VAL[e.type]) * 4;
             }
-            if(replyScore < worstReply) worstReply = replyScore;
-            if(oppKillKing) break;
           }
-          if(oppKillKing){ s -= 50000; }
-          else if(worstReply<Infinity) s += worstReply * cfg.reply;
-        }
-        finalList.push({ a:x.a, s:s });
+          if(!win && !suicide) s += evaluatePosition(res.np, aiPlayer, difficulty);
+          return { a:a, s:s, win:win, suicide:suicide };
+        });
+        var wins0 = scored0.filter(function(x){ return x.win; });
+        if(wins0.length) return wins0[Math.floor(Math.random()*wins0.length)].a;
+        var safe0 = scored0.filter(function(x){ return !x.suicide; });
+        var pool0 = safe0.length ? safe0 : scored0;
+        pool0.sort(function(x,y){ return y.s - x.s; });
+        var top0 = pool0.slice(0, cfg.candidates);
+        var bestS0 = top0[0].s;
+        var eq0 = top0.filter(function(x){ return x.s >= bestS0 - cfg.variety; });
+        return eq0[Math.floor(Math.random()*eq0.length)].a;
       }
-      if(!finalList.length) return {kind:"skip"};
-      finalList.sort(function(x,y){ return y.s - x.s; });
-      var bestS = finalList[0].s;
-      var eq = finalList.filter(function(x){ return x.s >= bestS - cfg.variety; });
+      // normal/hard: Alpha-Beta 搜索（depth=2/3）
+      var depth = cfg.depth;
+      var acts = allActions(pieces, aiPlayer);
+      // 根节点走法排序
+      var scored = [];
+      for(var i=0;i<acts.length;i++){
+        var a = acts[i];
+        var res = resolveTurn(pieces, aiPlayer, a);
+        var s, suicide = false, kingKill = false;
+        if(res.eliminated && res.eliminated.type === KING){
+          if(res.eliminated.owner === aiPlayer){
+            s = -100000 - depth; suicide = true;
+          } else {
+            s = 100000 + depth; kingKill = true;
+          }
+        } else {
+          s = evaluatePosition(res.np, aiPlayer, difficulty);
+          if(res.eliminated){
+            s += (res.eliminated.owner === aiPlayer ? -PIECE_VAL[res.eliminated.type] : PIECE_VAL[res.eliminated.type]) * 4;
+          }
+        }
+        scored.push({a:a, s:s, res:res, suicide:suicide, kingKill:kingKill});
+      }
+      scored.sort(function(x,y){ return y.s - x.s; });
+      var limit = Math.min(scored.length, cfg.candidates);
+      var results = [];
+      var alpha = -Infinity, beta = Infinity;
+      for(var j=0;j<limit;j++){
+        var c = scored[j];
+        if(c.suicide) continue;
+        var val;
+        if(c.kingKill){
+          val = 100000 + depth;
+        } else if(depth > 1){
+          val = -alphaBeta(c.res.np, depth - 1, -beta, -alpha, opp, difficulty);
+        } else {
+          val = c.s;
+        }
+        results.push({a:c.a, s:val});
+        if(val > alpha) alpha = val;
+      }
+      if(!results.length) return {kind:"skip"};
+      results.sort(function(x,y){ return y.s - x.s; });
+      var bestS = results[0].s;
+      var eq = results.filter(function(x){ return x.s >= bestS - cfg.variety; });
       return eq[Math.floor(Math.random()*eq.length)].a;
     }
 
