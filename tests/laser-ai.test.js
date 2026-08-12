@@ -6,9 +6,11 @@ var LaserGame = require("../games/laser/laser-game.js");
 function fakeContext(){
   var gradient = { addColorStop:function(){} };
   var texts = [];
+  var arcs = [];
   return new Proxy({
-    _texts:texts,
+    _texts:texts, _arcs:arcs,
     fillText:function(text){ texts.push(text); },
+    arc:function(x, y, radius){ arcs.push({radius:radius, strokeStyle:this.strokeStyle}); },
     measureText:function(s){ return {width:String(s).length * 8}; },
     createLinearGradient:function(){ return gradient; },
     createRadialGradient:function(){ return gradient; }
@@ -21,6 +23,28 @@ function fakeContext(){
 function piece(id, type, owner, row, col, orientation){
   return {id:id, type:type, owner:owner, row:row, col:col,
     orientation:orientation, alive:true};
+}
+
+function testAiAnimation(action, beforeSeconds, advanceSeconds, expected){
+  var animCtx = fakeContext();
+  var animGame = LaserGame.create(animCtx, 375, 667, function(){});
+  animGame._debugGame.beginMatch();
+  var before = animGame._debugGame.snapshot().pieces;
+  animGame._debugEffects.beginAiAction(action);
+  assert.equal(animGame._debugGame.snapshot().busy, true);
+  animGame.update(beforeSeconds);
+  assert.deepEqual(animGame._debugGame.snapshot().pieces, before,
+    action.kind + " must not mutate rule state before animation completion");
+  animGame.update(advanceSeconds - beforeSeconds);
+  var snap = animGame._debugGame.snapshot();
+  expected(snap, animCtx);
+  assert.equal(snap.aiAnim, null);
+  assert.equal(snap.busy, true,
+    action.kind + " must keep input blocked while the laser runs");
+  animGame.update(0.20);
+  assert.deepEqual(animGame._debugGame.snapshot().pieces, snap.pieces,
+    action.kind + " must commit exactly once");
+  animGame.exit();
 }
 
 var game = LaserGame.create(fakeContext(), 375, 667, function(){});
@@ -217,6 +241,70 @@ try {
     return (action.kind === "move" && action.r === 4 && action.c === 0) ||
       (action.kind === "swap" && action.ti === 1);
   }), "red pieces must not move or swap into a blue reserved cell");
+
+  testAiAnimation({pi:14, kind:"move", r:5, c:7}, 0.73, 0.75, function(snap, ctx){
+    assert.equal(snap.pieces[14].row, 5);
+    assert.equal(snap.pieces[14].col, 7);
+    assert.ok(ctx._texts.some(function(text){
+      return text.indexOf("电脑移动：") === 0;
+    }));
+  });
+
+  testAiAnimation({pi:14, kind:"rot", d:1}, 0.67, 0.70, function(snap, ctx){
+    assert.equal(snap.pieces[14].orientation,
+      (game._debugAI.initialPieces(0)[14].orientation + 1) % 4);
+    assert.ok(ctx._texts.indexOf("电脑旋转棋子") >= 0);
+  });
+
+  testAiAnimation({pi:25, kind:"laserRot", dir:1}, 0.67, 0.70, function(snap){
+    assert.equal(snap.pieces[25].orientation, 1);
+  });
+
+  var animatedSwap = [
+    piece("bs", "switch", 1, 4, 4, 0),
+    piece("rm", "mirror", 0, 4, 5, 0)
+  ];
+  var swapCtx = fakeContext();
+  var swapGame = LaserGame.create(swapCtx, 375, 667, function(){});
+  swapGame._debugGame.beginMatch();
+  swapGame._debugEffects.setPieces(animatedSwap);
+  swapCtx._arcs.length = 0;
+  swapGame._debugEffects.beginAiAction({pi:0, kind:"swap", ti:1});
+  assert.equal(swapGame._debugGame.snapshot().busy, true);
+  assert.equal(swapCtx._arcs.filter(function(arc){
+    return arc.strokeStyle === "rgba(255,225,77,0.95)";
+  }).length, 2, "swap lead-in must highlight both pieces");
+  swapGame.update(0.79);
+  assert.deepEqual(swapGame._debugGame.snapshot().pieces, animatedSwap,
+    "swap must keep both rule positions unchanged during animation");
+  swapGame.update(0.02);
+  var swapped = swapGame._debugEffects.snapshot();
+  assert.equal(swapped.pieces[0].row, 4);
+  assert.equal(swapped.pieces[0].col, 5);
+  assert.equal(swapped.pieces[1].row, 4);
+  assert.equal(swapped.pieces[1].col, 4);
+  assert.equal(swapped.aiAnim, null);
+  assert.ok(swapCtx._texts.indexOf("电脑互换棋子") >= 0);
+  swapGame.update(0.20);
+  assert.deepEqual(swapGame._debugEffects.snapshot().pieces, swapped.pieces,
+    "swap must commit exactly once");
+  swapGame.exit();
+
+  testAiAnimation({kind:"skip"}, 0.51, 0.53, function(snap, ctx){
+    assert.deepEqual(snap.pieces, game._debugAI.initialPieces(0));
+    assert.equal(snap.actionNotice, "电脑选择直接发射");
+    assert.ok(ctx._texts.indexOf("电脑选择直接发射") >= 0);
+  });
+
+  var invalidGame = LaserGame.create(fakeContext(), 375, 667, function(){});
+  invalidGame._debugGame.beginMatch();
+  invalidGame._debugEffects.beginAiAction({pi:999, kind:"move", r:3, c:3});
+  var recovered = invalidGame._debugGame.snapshot();
+  assert.equal(recovered.aiAnim, null);
+  assert.equal(recovered.phase, "anim",
+    "an animation creation failure must continue immediately to laser fire");
+  assert.equal(recovered.busy, true);
+  invalidGame.exit();
 
   for(var levelIndex = 0; levelIndex < 3; levelIndex++){
     var level = ["easy", "normal", "hard"][levelIndex];

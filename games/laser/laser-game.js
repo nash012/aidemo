@@ -69,8 +69,16 @@ module.exports = {
     cam.focal = Math.min(SW * 0.82, (boardAreaBot - boardAreaTop) * 1.3) * cam.dist / 10;
 
     var camAnim = null;
+    var pieceDrawPose = null;
 
     function project3D(x, y, z) {
+      if(pieceDrawPose){
+        var pdx = x - pieceDrawPose.x, pdz = z - pieceDrawPose.z;
+        var pcos = Math.cos(pieceDrawPose.angle), psin = Math.sin(pieceDrawPose.angle);
+        x = pieceDrawPose.x + pdx * pcos - pdz * psin;
+        z = pieceDrawPose.z + pdx * psin + pdz * pcos;
+        y += pieceDrawPose.height;
+      }
       z = -z; // 翻转z轴，使row 7（红方）在近端（屏幕底部），row 0（蓝方）在远端（屏幕顶部）
       var cosY = Math.cos(cam.yaw), sinY = Math.sin(cam.yaw);
       var rx = x * cosY - z * sinY;
@@ -690,6 +698,15 @@ module.exports = {
       }
     }
 
+    function drawAiRing(row, col, alpha, scale){
+      var p = project3D(col - (COLS-1)/2, 0.025, row - (ROWS-1)/2);
+      ctx.strokeStyle = "rgba(255,225,77," + alpha + ")";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.s * 0.34 * scale, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
     /* -------------------- 3D 棋盘渲染 -------------------- */
     function drawBoard3D(){
       var hw = COLS/2, hd = ROWS/2, th = 0.3;
@@ -1292,53 +1309,71 @@ module.exports = {
       for(var i=0;i<G.pieces.length;i++){
         var p = G.pieces[i];
         if(!p.alive) continue;
-        var wx = p.col - (COLS-1)/2;
-        var wz = p.row - (ROWS-1)/2;
-        var proj = project3D(wx, 0, wz);
-        drawList.push({ piece:p, depth:proj.z });
+        var pose = visualPose(p);
+        var wx = pose.col - (COLS-1)/2;
+        var wz = pose.row - (ROWS-1)/2;
+        var proj = project3D(wx, pose.height, wz);
+        drawList.push({ piece:p, pose:pose, depth:proj.z });
       }
       drawList.sort(function(a,b){ return b.depth - a.depth; });
       for(var j=0;j<drawList.length;j++){
-        drawPiece3D(drawList[j].piece);
+        drawPiece3D(drawList[j].piece, drawList[j].pose);
       }
     }
 
-    function drawPiece3D(p){
-      var wx = p.col - (COLS-1)/2;
-      var wz = p.row - (ROWS-1)/2;
+    function visualPose(piece){
+      var pose = {
+        row:piece.row, col:piece.col, height:0,
+        orientation:piece.orientation
+      };
+      var sample = sampleAiAnimation(G.aiAnim);
+      var pi = G.pieces.indexOf(piece);
+      if(sample && sample.poses && sample.poses[pi]) return sample.poses[pi];
+      return pose;
+    }
+
+    function drawPiece3D(p, pose){
+      pose = pose || visualPose(p);
+      var wx = pose.col - (COLS-1)/2;
+      var wz = pose.row - (ROWS-1)/2;
       var pw = 0.72, pd = 0.72;
       var ph = pieceHeight(p.type);
       var base = ownerColor(p.owner, false);
       var lite = ownerColor(p.owner, true);
 
-      // 镜子和双面镜使用3D棱柱造型
-      if(p.type === MIRROR){
-        drawShadow3D(wx, wz, pw, pd);
+      drawShadow3D(wx, wz, pw, pd);
+      pieceDrawPose = {
+        x:wx, z:wz, height:pose.height,
+        angle:(pose.orientation - p.orientation) * Math.PI / 2
+      };
+
+      try {
+        // 镜子和双面镜使用3D棱柱造型
+        if(p.type === MIRROR){
         drawMirrorPrism3D(wx, wz, p.orientation, base, lite);
         return;
-      }
-      if(p.type === SWITCH){
-        drawShadow3D(wx, wz, pw, pd);
+        }
+        if(p.type === SWITCH){
         drawSwitchPrism3D(wx, wz, p.orientation, base, lite);
         return;
-      }
-      // 激光使用圆柱炮台造型
-      if(p.type === LASER){
-        drawShadow3D(wx, wz, pw, pd);
+        }
+        // 激光使用圆柱炮台造型
+        if(p.type === LASER){
         drawLaserCylinder3D(wx, wz, p.orientation, base, lite);
         return;
-      }
-      // 国王使用3D塔楼造型（立起来）
-      if(p.type === KING){
-        drawShadow3D(wx, wz, pw, pd);
+        }
+        // 国王使用3D塔楼造型（立起来）
+        if(p.type === KING){
         drawKingTower3D(wx, wz, base, lite);
         return;
-      }
-      // 护盾使用3D墙壁造型（立起来）
-      if(p.type === SHIELD){
-        drawShadow3D(wx, wz, pw, pd);
+        }
+        // 护盾使用3D墙壁造型（立起来）
+        if(p.type === SHIELD){
         drawShieldBlock3D(wx, wz, p.orientation, base, lite);
         return;
+        }
+      } finally {
+        pieceDrawPose = null;
       }
     }
 
@@ -1601,6 +1636,7 @@ module.exports = {
         drawTopBar();
         drawBoard3D();
         drawPieces3D();
+        drawAiActionOverlay();
         if(G.flashN > 0 && G.flashPiece) drawFlash3D();
         if(G.particles && G.particles.length > 0) drawParticles3D();
         if(G.path && G.path.length > 1) drawBeam3D();
@@ -1876,27 +1912,150 @@ module.exports = {
         var act;
         try { act = aiChoose(G.pieces, G.aiPlayer, G.lockedDifficulty); }
         catch(e) { G.busy = false; endTurn(); return; }
-        G.busy = false;
         applyAiAction(act);
       }, 420);
     }
-    function applyAiAction(act){
-      if(act.kind === "skip"){
-        G.busy = false; G.sel = -1;
-        try { render(); } catch(e) {}
-        _setTrackTimeout(function(){ G.undoSnapshot = null; endTurn(); }, 520);
-        return;
-      }
+
+    function boardCellName(row, col){
+      return String.fromCharCode(65 + col) + (ROWS - row);
+    }
+
+    function commitAiAction(act){
+      if(!act || act.kind === "skip") return true;
       var p = G.pieces[act.pi];
-      if(!p){ G.busy = false; endTurn(); return; }
-      G.sel = act.pi;
+      if(!p) return false;
       if(act.kind === "rot") p.orientation = (p.orientation + act.d) % 4;
       else if(act.kind === "laserRot") p.orientation = act.dir;
       else if(act.kind === "move"){ p.row = act.r; p.col = act.c; }
-      else if(act.kind === "swap"){ var t = G.pieces[act.ti]; if(!t){ G.busy=false; endTurn(); return; } var tr=t.row,tc=t.col; t.row=p.row;t.col=p.col; p.row=tr;p.col=tc; }
-      try { render(); } catch(e) {}
+      else if(act.kind === "swap"){
+        var t = G.pieces[act.ti];
+        if(!t) return false;
+        var tr=t.row,tc=t.col;
+        t.row=p.row;t.col=p.col; p.row=tr;p.col=tc;
+      } else return false;
+      return true;
+    }
+
+    function createAiAnimation(act){
+      if(!act) throw new Error("missing AI action");
+      if(act.kind === "skip"){
+        return {action:copySnapshotValue(act), kind:"skip", t:0, duration:0.52};
+      }
+      var p = G.pieces[act.pi];
+      if(!p) throw new Error("invalid AI piece");
+      var anim = {
+        action:copySnapshotValue(act), kind:act.kind, pi:act.pi, t:0,
+        fromRow:p.row, fromCol:p.col, toRow:p.row, toCol:p.col,
+        fromOrientation:p.orientation, toOrientation:p.orientation
+      };
+      if(act.kind === "move"){
+        anim.toRow=act.r; anim.toCol=act.c; anim.duration=0.74;
+      } else if(act.kind === "rot"){
+        anim.toOrientation=(p.orientation+act.d)%4; anim.duration=0.68;
+      } else if(act.kind === "laserRot"){
+        anim.toOrientation=act.dir; anim.duration=0.68;
+      } else if(act.kind === "swap"){
+        var target = G.pieces[act.ti];
+        if(!target) throw new Error("invalid AI swap target");
+        anim.ti=act.ti; anim.targetRow=target.row; anim.targetCol=target.col;
+        anim.targetOrientation=target.orientation;
+        anim.toRow=target.row; anim.toCol=target.col; anim.duration=0.80;
+      } else throw new Error("invalid AI action");
+      return anim;
+    }
+
+    function sampleAiAnimation(anim){
+      if(!anim) return null;
+      var sample = {poses:{}, lead:false, landing:0};
+      if(anim.kind === "skip") return sample;
+      var motionEnd = anim.duration - 0.16;
+      var mt = Math.max(0, Math.min(1, (anim.t - 0.16) / (motionEnd - 0.16)));
+      var e = easeInOut(mt);
+      var lift = Math.sin(Math.PI * mt) * 0.34;
+      var orientationDelta = anim.toOrientation - anim.fromOrientation;
+      if(orientationDelta > 2) orientationDelta -= 4;
+      if(orientationDelta < -2) orientationDelta += 4;
+      sample.lead = anim.t < 0.16;
+      sample.landing = anim.t > motionEnd ?
+        Math.max(0, 1 - (anim.t - motionEnd) / 0.16) : 0;
+      sample.poses[anim.pi] = {
+        row:anim.fromRow + (anim.toRow - anim.fromRow) * e,
+        col:anim.fromCol + (anim.toCol - anim.fromCol) * e,
+        height:(anim.kind === "move" || anim.kind === "swap") ? lift : 0,
+        orientation:anim.fromOrientation + orientationDelta * e
+      };
+      if(anim.kind === "swap"){
+        sample.poses[anim.ti] = {
+          row:anim.targetRow + (anim.fromRow - anim.targetRow) * e,
+          col:anim.targetCol + (anim.fromCol - anim.targetCol) * e,
+          height:lift,
+          orientation:anim.targetOrientation
+        };
+      }
+      return sample;
+    }
+
+    function finishAiAnimation(anim){
+      if(!anim.committed){
+        anim.committed = true;
+        commitAiAction(anim.action);
+      }
+      G.aiAnim = null;
       G.phase = "fire";
-      _setTrackTimeout(function(){ fireLaser(); }, 520);
+      try { render(); } catch(e) {}
+      fireLaser();
+    }
+
+    function updateAiAnimation(dt){
+      if(!G.aiAnim) return;
+      var anim = G.aiAnim;
+      try {
+        anim.t += Math.max(0, dt || 0);
+        sampleAiAnimation(anim);
+        if(anim.t >= anim.duration) finishAiAnimation(anim);
+        else render();
+      } catch(e) {
+        finishAiAnimation(anim);
+      }
+    }
+
+    function drawAiActionOverlay(){
+      var anim = G.aiAnim;
+      if(!anim || !G.actionNotice) return;
+      var sample = sampleAiAnimation(anim);
+      if(anim.kind !== "skip"){
+        if(sample.lead){
+          drawAiRing(anim.fromRow, anim.fromCol, 0.95, 1);
+          if(anim.kind === "swap") drawAiRing(anim.targetRow, anim.targetCol, 0.95, 1);
+        }
+        if(sample.landing){
+          drawAiRing(anim.toRow, anim.toCol, sample.landing, 1.15 + (1-sample.landing)*0.35);
+          if(anim.kind === "swap") drawAiRing(anim.fromRow, anim.fromCol,
+            sample.landing, 1.15 + (1-sample.landing)*0.35);
+        }
+      }
+      ctx.fillStyle = "#ffe14d";
+      ctx.font = "700 14px sans-serif";
+      ctx.textAlign = "center"; ctx.textBaseline = "top";
+      ctx.fillText(G.actionNotice, SW/2, boardAreaTop + 4);
+    }
+
+    function applyAiAction(act){
+      G.busy = true; G.sel = -1;
+      try {
+        G.aiAnim = createAiAnimation(act);
+        if(act.kind === "move") G.actionNotice = "电脑移动：" +
+          boardCellName(G.aiAnim.fromRow, G.aiAnim.fromCol) + " → " +
+          boardCellName(G.aiAnim.toRow, G.aiAnim.toCol);
+        else if(act.kind === "rot" || act.kind === "laserRot") G.actionNotice = "电脑旋转棋子";
+        else if(act.kind === "swap") G.actionNotice = "电脑互换棋子";
+        else G.actionNotice = "电脑选择直接发射";
+        render();
+      } catch(e) {
+        commitAiAction(act);
+        G.aiAnim = null; G.phase = "fire";
+        fireLaser();
+      }
     }
 
     /* -------------------- 平局 -------------------- */
@@ -2258,6 +2417,7 @@ module.exports = {
             cam.pitch = camAnim.fp + (camAnim.tp - camAnim.fp) * e;
           }
         }
+        updateAiAnimation(dt);
         updateParticles(dt);
       },
       render: function(){ render(); },
@@ -2300,6 +2460,15 @@ module.exports = {
         closeModal: closeModal,
         requestReturn: requestReturnToSetup,
         confirmReturn: confirmReturnToSetup
+      },
+      _debugEffects: {
+        beginAiAction: applyAiAction,
+        setPieces: function(pieces){ G.pieces = pieces.map(copySnapshotValue); },
+        snapshot: function(){ return {
+          pieces:G.pieces.map(copySnapshotValue),
+          aiAnim:copySnapshotValue(G.aiAnim),
+          actionNotice:G.actionNotice, busy:G.busy, phase:G.phase
+        }; }
       },
       exit: function(){
         for(var i=0;i<_timeouts.length;i++) clearTimeout(_timeouts[i]);
