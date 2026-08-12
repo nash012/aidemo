@@ -7,10 +7,12 @@ function fakeContext(){
   var gradient = { addColorStop:function(){} };
   var texts = [];
   var arcs = [];
+  var strokes = [];
   return new Proxy({
-    _texts:texts, _arcs:arcs,
+    _texts:texts, _arcs:arcs, _strokes:strokes,
     fillText:function(text){ texts.push(text); },
     arc:function(x, y, radius){ arcs.push({radius:radius, strokeStyle:this.strokeStyle}); },
+    stroke:function(){ strokes.push({strokeStyle:this.strokeStyle, lineWidth:this.lineWidth}); },
     measureText:function(s){ return {width:String(s).length * 8}; },
     createLinearGradient:function(){ return gradient; },
     createRadialGradient:function(){ return gradient; }
@@ -67,6 +69,31 @@ assert.deepEqual(reflectedPath, [
 assert.deepEqual(game._debugEffects.beamTurns([
   {r:0,c:0}, {r:0,c:1}, null, {r:1,c:2}
 ]), [], "malformed visual paths must not produce partial turn effects");
+assert.deepEqual(game._debugEffects.beamTurns([{r:0,c:0}, {r:0,c:1}]), [],
+  "short visual paths must not produce turns");
+assert.deepEqual(game._debugEffects.beamTurns([
+  {r:0,c:0}, {r:0,c:0}, {r:0,c:1}
+]), [], "repeated visual points must not produce turns");
+[null, "0", NaN, Infinity].forEach(function(bad){
+  assert.deepEqual(game._debugEffects.beamTurns([
+    {r:0,c:0}, {r:bad,c:1}, {r:1,c:1}
+  ]), [], "invalid coordinates must not produce turns: " + bad);
+});
+
+var beamCtx = fakeContext();
+var beamGame = LaserGame.create(beamCtx, 375, 667, function(){});
+beamGame._debugGame.beginMatch();
+beamGame._debugEffects.setPieces([piece("rl", "laser", 0, 0, 0, 1)]);
+beamCtx._strokes.length = 0;
+beamGame._debugEffects.beginAiAction({kind:"skip"});
+beamGame.update(0.90);
+var glowWidths = beamCtx._strokes.filter(function(stroke){
+  return stroke.strokeStyle === "#ff8a35";
+}).map(function(stroke){ return stroke.lineWidth; });
+assert.ok(glowWidths.length > 0, "beam render must draw an orange glow");
+assert.ok(glowWidths.every(function(width){ return width >= 4 && width <= 6; }),
+  "orange glow width must remain within 4–6px after its pulse");
+beamGame.exit();
 
 var initial = game._debugGame.snapshot();
 assert.equal(initial.screen, "setup");

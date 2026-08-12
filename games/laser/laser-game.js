@@ -1383,8 +1383,7 @@ module.exports = {
       var turns = [];
       for(var i=1;i<path.length-1;i++){
         var prev = path[i-1], curr = path[i], next = path[i+1];
-        if(!prev || !curr || !next || !isFinite(prev.r) || !isFinite(prev.c) ||
-          !isFinite(curr.r) || !isFinite(curr.c) || !isFinite(next.r) || !isFinite(next.c)) return [];
+        if(!isBeamPoint(prev) || !isBeamPoint(curr) || !isBeamPoint(next)) return [];
         var dr1 = curr.r - prev.r, dc1 = curr.c - prev.c;
         var dr2 = next.r - curr.r, dc2 = next.c - curr.c;
         if((dr1 === 0 && dc1 === 0) || (dr2 === 0 && dc2 === 0)) continue;
@@ -1393,6 +1392,10 @@ module.exports = {
         if(dr1 !== dr2 || dc1 !== dc2) turns.push({r:curr.r, c:curr.c});
       }
       return turns;
+    }
+    function isBeamPoint(point){
+      return !!point && typeof point.r === "number" && typeof point.c === "number" &&
+        isFinite(point.r) && isFinite(point.c);
     }
 
     function drawBeam3D(){
@@ -1412,7 +1415,7 @@ module.exports = {
       ctx.save();
       ctx.lineCap = "round"; ctx.lineJoin = "round";
       var pulse = 0.88 + Math.sin(G.beamPulseT * 14) * 0.12;
-      var glowW = Math.max(4, Math.min(6, cam.focal / cam.dist * 0.1)) * pulse;
+      var glowW = Math.max(4, Math.min(6, 5 * pulse));
       var energyW = Math.max(2, Math.min(3, glowW * 0.55));
       ctx.globalAlpha = 0.22 * pulse;
       ctx.shadowColor = "rgba(255,130,40,0.8)"; ctx.shadowBlur = 8;
