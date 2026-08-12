@@ -42,8 +42,8 @@ module.exports = {
     var LASER = "laser", KING = "king", SHIELD = "shield", MIRROR = "mirror", SWITCH = "switch";
     var PIECE_VAL = { king:10000, shield:3, switch:4, mirror:2, laser:0 };
     var AI_LEVELS = {
-      easy:   {attack:0.25, defense:1.2, guard:2.0, reply:0,   candidates:16, variety:8},
-      normal: {attack:1.8,  defense:0.7, guard:0.6, reply:0.3, candidates:32, variety:3},
+      easy:   {attack:0.65, defense:1.25, guard:1.7, reply:0,    candidates:24, variety:5},
+      normal: {attack:2.0,  defense:0.9,  guard:0.8, reply:0.55, candidates:40, variety:1.5},
       hard:   {attack:1.2,  defense:1.2, guard:1.5, reply:1.0, candidates:40, variety:0.5}
     };
     var MIRROR_MAP = [ {1:0,2:3}, {3:0,2:1}, {3:2,0:1}, {1:2,0:3} ];
@@ -2272,6 +2272,7 @@ module.exports = {
       cameraControl: function(dx, dy){ externalCameraControl(dx, dy); },
       _debugAI: {
         choose: function(pieces, player, level){ return aiChoose(pieces, player, level); },
+        config: function(level){ return Object.assign({}, AI_LEVELS[level] || AI_LEVELS.normal); },
         actions: function(pieces, player){ return generateActions(pieces, player); },
         resolve: function(pieces, player, action){ return resolveTurn(pieces, player, action); },
         initialPieces: function(layoutIndex){ return makeInitialPieces(layoutIndex); },

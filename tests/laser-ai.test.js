@@ -139,6 +139,23 @@ var safePressure = [
   piece("rk", "king", 0, 4, 4, 0)
 ];
 
+assert.deepEqual(game._debugAI.config("easy"), {
+  attack:0.65, defense:1.25, guard:1.7,
+  reply:0, candidates:24, variety:5
+});
+assert.deepEqual(game._debugAI.config("normal"), {
+  attack:2.0, defense:0.9, guard:0.8,
+  reply:0.55, candidates:40, variety:1.5
+});
+assert.deepEqual(game._debugAI.config("hard"), {
+  attack:1.2, defense:1.2, guard:1.5,
+  reply:1.0, candidates:40, variety:0.5
+});
+var easyConfig = game._debugAI.config("easy");
+easyConfig.attack = 99;
+assert.equal(game._debugAI.config("easy").attack, 0.65,
+  "config must not expose mutable AI level settings");
+
 var mateThreat = [
   piece("bl", "laser", 1, 0, 0, 2),
   piece("bm", "mirror", 1, 3, 0, 0),
@@ -150,10 +167,12 @@ var mateThreat = [
 var savedRandom = Math.random;
 Math.random = function(){ return 0; };
 try {
-  var normal = game._debugAI.choose(safePressure, 1, "normal");
-  assert.equal(normal.pi, 1, "normal should use the mirror to build pressure");
-  assert.equal(normal.kind, "rot");
-  assert.equal(normal.d, 1);
+  ["easy", "normal"].forEach(function(level){
+    var action = game._debugAI.choose(safePressure, 1, level);
+    assert.equal(action.pi, 1, level + " should use the mirror to build pressure");
+    assert.equal(action.kind, "rot");
+    assert.equal(action.d, 1);
+  });
 
   var hard = game._debugAI.choose(mateThreat, 1, "hard");
   assert.equal(hard.pi, 2, "hard should move the exposed king");
@@ -199,12 +218,15 @@ try {
       (action.kind === "swap" && action.ti === 1);
   }), "red pieces must not move or swap into a blue reserved cell");
 
-  for(var layoutIndex = 0; layoutIndex < 5; layoutIndex++){
-    var started = Date.now();
-    game._debugAI.choose(game._debugAI.initialPieces(layoutIndex), 1, "hard");
-    var elapsed = Date.now() - started;
-    assert.ok(elapsed < 500,
-      "hard layout " + layoutIndex + " took " + elapsed + "ms");
+  for(var levelIndex = 0; levelIndex < 3; levelIndex++){
+    var level = ["easy", "normal", "hard"][levelIndex];
+    for(var layoutIndex = 0; layoutIndex < 5; layoutIndex++){
+      var started = Date.now();
+      game._debugAI.choose(game._debugAI.initialPieces(layoutIndex), 1, level);
+      var elapsed = Date.now() - started;
+      assert.ok(elapsed < 500,
+        level + " layout " + layoutIndex + " took " + elapsed + "ms");
+    }
   }
 } finally {
   Math.random = savedRandom;
