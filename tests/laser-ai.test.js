@@ -52,6 +52,22 @@ assert.ok(game._debugAI, "AI debug surface must exist");
 
 assert.ok(game._debugGame, "game-state debug surface must exist");
 
+assert.ok(game._debugEffects.beamTurns, "beam effects debug surface must exist");
+var reflectedPath = [
+  {r:0,c:0}, {r:0,c:1}, {r:0,c:2},
+  {r:1,c:2}, {r:2,c:2}, {r:2,c:3}
+];
+assert.deepEqual(game._debugEffects.beamTurns(reflectedPath), [
+  {r:0,c:2}, {r:2,c:2}
+]);
+assert.deepEqual(reflectedPath, [
+  {r:0,c:0}, {r:0,c:1}, {r:0,c:2},
+  {r:1,c:2}, {r:2,c:2}, {r:2,c:3}
+], "beam effects must not mutate the simulated path");
+assert.deepEqual(game._debugEffects.beamTurns([
+  {r:0,c:0}, {r:0,c:1}, null, {r:1,c:2}
+]), [], "malformed visual paths must not produce partial turn effects");
+
 var initial = game._debugGame.snapshot();
 assert.equal(initial.screen, "setup");
 assert.equal(initial.layoutIdx, 0);

@@ -423,14 +423,14 @@ module.exports = {
       pieces:[], current:0, phase:"select", sel:-1, mode:"pve", aiPlayer:1,
       difficulty:"normal", screen:"setup", lockedLayoutIdx:null, lockedDifficulty:null,
       rulesScroll:0, aiAnim:null, actionNotice:null,
-      path:null, animT:0, over:false, winner:-1, busy:false,
+      path:null, animT:0, beamPulseT:0, over:false, winner:-1, busy:false,
       history:{}, drawOffer:false, modal:null, flashN:0, flashPiece:null,
       eliminated:null, layoutIdx:0, layoutPanel:false, undoSnapshot:null,
       particles:[], particleT:0
     };
 
     function clearMatchVisualState(){
-      G.path=null; G.animT=0; G.sel=-1;
+      G.path=null; G.animT=0; G.beamPulseT=0; G.sel=-1;
       G.flashN=0; G.flashPiece=null; G.eliminated=null;
       G.undoSnapshot=null; G.particles=[]; G.particleT=0;
       G.aiAnim=null; G.actionNotice=null; camAnim=null;
@@ -1378,6 +1378,23 @@ module.exports = {
     }
 
     /* -------------------- 3D 激光束渲染 -------------------- */
+    function beamTurns(path){
+      if(!Array.isArray(path) || path.length < 3) return [];
+      var turns = [];
+      for(var i=1;i<path.length-1;i++){
+        var prev = path[i-1], curr = path[i], next = path[i+1];
+        if(!prev || !curr || !next || !isFinite(prev.r) || !isFinite(prev.c) ||
+          !isFinite(curr.r) || !isFinite(curr.c) || !isFinite(next.r) || !isFinite(next.c)) return [];
+        var dr1 = curr.r - prev.r, dc1 = curr.c - prev.c;
+        var dr2 = next.r - curr.r, dc2 = next.c - curr.c;
+        if((dr1 === 0 && dc1 === 0) || (dr2 === 0 && dc2 === 0)) continue;
+        dr1 /= Math.abs(dr1) || 1; dc1 /= Math.abs(dc1) || 1;
+        dr2 /= Math.abs(dr2) || 1; dc2 /= Math.abs(dc2) || 1;
+        if(dr1 !== dr2 || dc1 !== dc2) turns.push({r:curr.r, c:curr.c});
+      }
+      return turns;
+    }
+
     function drawBeam3D(){
       if(!G.path || !Array.isArray(G.path) || G.path.length < 2) return;
       var prog = G.animT || 0;
@@ -1394,26 +1411,53 @@ module.exports = {
       }
       ctx.save();
       ctx.lineCap = "round"; ctx.lineJoin = "round";
-      var baseLW = Math.max(6, cam.focal / cam.dist * 0.15);
-      ctx.strokeStyle = "rgba(255,225,77,0.2)"; ctx.lineWidth = baseLW * 2.5;
+      var pulse = 0.88 + Math.sin(G.beamPulseT * 14) * 0.12;
+      var glowW = Math.max(4, Math.min(6, cam.focal / cam.dist * 0.1)) * pulse;
+      var energyW = Math.max(2, Math.min(3, glowW * 0.55));
+      ctx.globalAlpha = 0.22 * pulse;
+      ctx.shadowColor = "rgba(255,130,40,0.8)"; ctx.shadowBlur = 8;
+      ctx.strokeStyle = "#ff8a35"; ctx.lineWidth = glowW;
       beamPath3D(pts, upto); ctx.stroke();
-      ctx.strokeStyle = "#ffe14d"; ctx.lineWidth = baseLW;
+      ctx.globalAlpha = 0.95 * pulse;
+      ctx.shadowBlur = 0; ctx.strokeStyle = "#ffe14d"; ctx.lineWidth = energyW;
       beamPath3D(pts, upto); ctx.stroke();
-      ctx.strokeStyle = "#fffbe6"; ctx.lineWidth = baseLW * 0.35;
+      ctx.globalAlpha = 1; ctx.strokeStyle = "#fffbe6"; ctx.lineWidth = Math.max(1, Math.min(1.5, energyW * 0.5));
       beamPath3D(pts, upto); ctx.stroke();
-      if(upto < total && upto >= 0){
-        var idx = Math.floor(upto), frac = upto - idx;
-        if(idx >= 0 && idx < n-1){
-          var a = pts[idx], b = pts[idx+1];
-          var hx = a.x + (b.x-a.x)*frac, hy = a.y + (b.y-a.y)*frac;
-          var g = ctx.createRadialGradient(hx, hy, 0, hx, hy, baseLW*3);
-          g.addColorStop(0, "rgba(255,255,255,0.9)");
-          g.addColorStop(1, "rgba(255,225,77,0)");
-          ctx.fillStyle = g;
-          ctx.beginPath(); ctx.arc(hx, hy, baseLW*3, 0, 6.283); ctx.fill();
+      var head = beamHead3D(pts, upto);
+      if(head){
+        ctx.fillStyle = "#ffe14d";
+        ctx.beginPath(); ctx.arc(head.x, head.y, Math.max(2, energyW * 1.2), 0, 6.283); ctx.fill();
+        ctx.fillStyle = "#fffbe6";
+        ctx.beginPath(); ctx.arc(head.x, head.y, Math.max(1, energyW * 0.55), 0, 6.283); ctx.fill();
+      }
+      drawBeamTurns3D(pts, beamTurns(G.path), upto, pulse, energyW);
+      ctx.restore();
+    }
+    function beamHead3D(pts, upto){
+      var idx = Math.floor(Math.max(0, Math.min(pts.length - 1, upto)));
+      if(idx >= pts.length - 1) return pts[pts.length - 1];
+      var frac = upto - idx, a = pts[idx], b = pts[idx+1];
+      return {x:a.x + (b.x-a.x)*frac, y:a.y + (b.y-a.y)*frac};
+    }
+    function drawBeamTurns3D(pts, turns, upto, pulse, energyW){
+      var life = Math.max(0, Math.min(1, upto - Math.floor(upto)));
+      for(var i=0;i<turns.length;i++){
+        var turn = turns[i], index = -1;
+        for(var j=1;j<pts.length-1;j++){
+          if(G.path[j].r === turn.r && G.path[j].c === turn.c){ index = j; break; }
+        }
+        if(index < 0 || upto < index) continue;
+        var p = pts[index], alpha = Math.max(0, 1 - (upto - index) * 2) * pulse;
+        if(alpha <= 0) continue;
+        ctx.globalAlpha = alpha * 0.7;
+        ctx.strokeStyle = "#ffe14d"; ctx.lineWidth = 1; ctx.shadowBlur = 0;
+        ctx.beginPath(); ctx.arc(p.x, p.y, energyW * (1.4 + life), 0, 6.283); ctx.stroke();
+        for(var s=0;s<4;s++){
+          var angle = s * Math.PI / 2 + G.beamPulseT * 9;
+          ctx.beginPath(); ctx.moveTo(p.x + Math.cos(angle) * energyW, p.y + Math.sin(angle) * energyW);
+          ctx.lineTo(p.x + Math.cos(angle) * energyW * 2.2, p.y + Math.sin(angle) * energyW * 2.2); ctx.stroke();
         }
       }
-      ctx.restore();
     }
     function beamPath3D(pts, upto){
       ctx.beginPath();
@@ -1854,7 +1898,7 @@ module.exports = {
       var sim;
       try { sim = simulateLaser(G.pieces, laser); }
       catch(e) { sim = { path:[{r:laser.row, c:laser.col}], eliminated:null }; }
-      G.path = sim.path; G.eliminated = sim.eliminated; G.phase = "anim"; G.animT = 0; G.busy = true;
+      G.path = sim.path; G.eliminated = sim.eliminated; G.phase = "anim"; G.animT = 0; G.beamPulseT = 0; G.busy = true;
       render();
       var start = Date.now(), dur = Math.max(300, (G.path.length - 1) * 120);
       function step(){
@@ -2405,6 +2449,7 @@ module.exports = {
     /* -------------------- 模块接口 -------------------- */
     return {
       update: function(dt){
+        G.beamPulseT += Math.max(0, dt || 0);
         if(camAnim){
           camAnim.t += dt / camAnim.dur;
           if(camAnim.t >= 1){
@@ -2462,6 +2507,7 @@ module.exports = {
         confirmReturn: confirmReturnToSetup
       },
       _debugEffects: {
+        beamTurns: function(path){ return beamTurns(path).map(copySnapshotValue); },
         beginAiAction: applyAiAction,
         setPieces: function(pieces){ G.pieces = pieces.map(copySnapshotValue); },
         snapshot: function(){ return {
