@@ -112,6 +112,9 @@ function parseGlb(input){
       if(primitive.attributes.NORMAL === undefined)
         fail("mesh " + meshIndex + " lacks NORMAL");
       if(primitive.indices === undefined) fail("mesh " + meshIndex + " lacks indices");
+      var indexAccessor = doc.accessors && doc.accessors[primitive.indices];
+      if(indexAccessor && indexAccessor.componentType === 5125)
+        fail("32-bit indices are unsupported by the WebGL1 renderer");
       var positions = decodeAccessor(primitive.attributes.POSITION, doc, buffer, chunks.bin);
       var normals = decodeAccessor(primitive.attributes.NORMAL, doc, buffer, chunks.bin);
       var indices = decodeAccessor(primitive.indices, doc, buffer, chunks.bin);
@@ -147,19 +150,69 @@ function parseGlb(input){
 }
 
 function mirrorSurfaces(model){
-  var names = model.nodes.map(function(node){ return node.name; });
-  var single = names.filter(function(name){ return /_Mirror_Face$/.test(name); });
-  var front = names.filter(function(name){ return /_Mirror_Front$/.test(name); });
-  var back = names.filter(function(name){ return /_Mirror_Back$/.test(name); });
+  var single = model.nodes.filter(function(node){ return /_Mirror_Face$/.test(node.name); });
+  var front = model.nodes.filter(function(node){ return /_Mirror_Front$/.test(node.name); });
+  var back = model.nodes.filter(function(node){ return /_Mirror_Back$/.test(node.name); });
   if(single.length){
     if(single.length !== 1 || front.length || back.length) fail("single mirror surface metadata");
-    return single;
+    validateMirrorPlane(single[0], model);
+    return [single[0].name];
   }
   if(front.length || back.length){
     if(front.length !== 1 || back.length !== 1 || single.length) fail("double mirror surface metadata");
-    return [front[0], back[0]];
+    validateMirrorPlane(front[0], model); validateMirrorPlane(back[0], model);
+    return [front[0].name, back[0].name];
   }
   fail("missing mirror surface metadata");
 }
 
-module.exports = {parseGlb:parseGlb, mirrorSurfaces:mirrorSurfaces};
+function validateMirrorPlane(node, model){
+  var mesh = model.meshes[node.mesh];
+  if(!mesh) fail("mirror surface lacks mesh geometry");
+  if(node.matrix || node.translation.some(function(v){ return v !== 0; }) ||
+     node.rotation.some(function(v,i){ return v !== [0,0,0,1][i]; }) ||
+     node.scale.some(function(v){ return v !== 1; }))
+    fail("mirror surface transform is unsupported");
+  var min = [Infinity,Infinity,Infinity], max = [-Infinity,-Infinity,-Infinity];
+  var axisArea = [0,0,0], alignedArea = 0, totalArea = 0;
+  mesh.primitives.forEach(function(primitive){
+    for(var i=0;i<primitive.positions.length;i+=3) for(var axis=0;axis<3;axis++){
+      min[axis] = Math.min(min[axis], primitive.positions[i+axis]);
+      max[axis] = Math.max(max[axis], primitive.positions[i+axis]);
+    }
+    for(var n=0;n<primitive.indices.length;n+=3){
+      var ia=primitive.indices[n]*3, ib=primitive.indices[n+1]*3, ic=primitive.indices[n+2]*3;
+      var ab=[primitive.positions[ib]-primitive.positions[ia],primitive.positions[ib+1]-primitive.positions[ia+1],primitive.positions[ib+2]-primitive.positions[ia+2]];
+      var ac=[primitive.positions[ic]-primitive.positions[ia],primitive.positions[ic+1]-primitive.positions[ia+1],primitive.positions[ic+2]-primitive.positions[ia+2]];
+      var cross=[ab[1]*ac[2]-ab[2]*ac[1],ab[2]*ac[0]-ab[0]*ac[2],ab[0]*ac[1]-ab[1]*ac[0]];
+      var area=Math.hypot(cross[0],cross[1],cross[2]);
+      if(!area) continue;
+      totalArea+=area;
+      for(var axis=0;axis<3;axis++) axisArea[axis]+=Math.abs(cross[axis]);
+      var normal=[0,0,0];
+      for(var vertex=0;vertex<3;vertex++) for(var component=0;component<3;component++)
+        normal[component]+=primitive.normals[[ia,ib,ic][vertex]+component];
+      var normalLength=Math.hypot(normal[0],normal[1],normal[2]);
+      if(normalLength && Math.abs((normal[0]*cross[0]+normal[1]*cross[1]+normal[2]*cross[2])/(normalLength*area))>.9)
+        alignedArea+=area;
+    }
+  });
+  var size = [max[0]-min[0],max[1]-min[1],max[2]-min[2]];
+  if(!Number.isFinite(size[2]) || size[2] >= Math.min(size[0],size[1]) ||
+     axisArea[2] <= Math.max(axisArea[0],axisArea[1]))
+    fail("mirror surface geometry must define a vertical Z-facing plane");
+  if(!totalArea || alignedArea / totalArea < .9) fail("mirror surface normal data is inconsistent");
+  var centerZ=(min[2]+max[2])/2;
+  if(Math.abs(centerZ)<1e-6) fail("mirror surface side is ambiguous");
+  return [0,centerZ>0 ? 1 : -1];
+}
+
+function mirrorSurfaceNormals(model){
+  var surfaceNames=mirrorSurfaces(model);
+  return surfaceNames.map(function(name){
+    return validateMirrorPlane(model.nodes.filter(function(node){ return node.name===name; })[0],model);
+  });
+}
+
+module.exports = {parseGlb:parseGlb, mirrorSurfaces:mirrorSurfaces,
+  mirrorSurfaceNormals:mirrorSurfaceNormals};

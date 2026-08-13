@@ -40,21 +40,45 @@ function sortedCells(source){
 function zoneCells(){ return {red:sortedCells(RED), white:sortedCells(WHITE)}; }
 
 function orientationAngle(type, orientation){
-  if(!MODEL_PREFIX[type] || !Number.isInteger(orientation) || orientation < 0 || orientation > 3)
+  if(!MODEL_PREFIX[type] || !Number.isFinite(orientation))
     return NaN;
-  return orientation * Math.PI / 2;
+  if(type === "mirror") return Math.PI / 4 - orientation * Math.PI / 2;
+  if(type === "switch") return Math.PI / 4 + orientation * Math.PI / 2;
+  return Math.PI - orientation * Math.PI / 2;
 }
 
-function validateMirrorDirections(){
+function validateMirrorDirections(authoredNormal){
+  authoredNormal=authoredNormal || [0,1];
+  if(!Array.isArray(authoredNormal) || authoredNormal.length!==2 ||
+     !Number.isFinite(authoredNormal[0]) || !Number.isFinite(authoredNormal[1])) return false;
+  var normalLength=Math.hypot(authoredNormal[0],authoredNormal[1]);
+  if(normalLength<.9) return false;
+  var localX=authoredNormal[0]/normalLength,localZ=authoredNormal[1]/normalLength;
+  var directions = [[0,-1],[1,0],[0,1],[-1,0]];
+  function reflected(inDir, angle){
+    var d = directions[inDir];
+    var nx=Math.cos(angle)*localX+Math.sin(angle)*localZ;
+    var nz=-Math.sin(angle)*localX+Math.cos(angle)*localZ;
+    var dot = d[0]*nx + d[1]*nz;
+    var rx = d[0] - 2*dot*nx, rz = d[1] - 2*dot*nz;
+    var best = -1, bestDot = -Infinity;
+    for(var i=0;i<4;i++){
+      var score = rx*directions[i][0] + rz*directions[i][1];
+      if(score > bestDot){ bestDot = score; best = i; }
+    }
+    return best;
+  }
   for(var orientation=0;orientation<4;orientation++){
     var single = MIRROR_MAP[orientation];
-    var expectedSingle = [
-      {1:0,2:3}, {3:0,2:1}, {3:2,0:1}, {1:2,0:3}
-    ][orientation];
-    if(JSON.stringify(single) !== JSON.stringify(expectedSingle)) return false;
+    var singleAngle = orientationAngle("mirror", orientation);
+    var singleInputs = Object.keys(single);
+    for(var s=0;s<singleInputs.length;s++){
+      var inDir = Number(singleInputs[s]);
+      if(reflected(inDir, singleAngle) !== single[inDir]) return false;
+    }
     var switchTable = SWITCH_MAP[orientation];
-    var expectedSwitch = orientation % 2 === 0 ? {1:0,0:1,3:2,2:3} : {1:2,2:1,3:0,0:3};
-    if(JSON.stringify(switchTable) !== JSON.stringify(expectedSwitch)) return false;
+    var switchAngle = orientationAngle("switch", orientation);
+    for(var input=0;input<4;input++) if(reflected(input, switchAngle) !== switchTable[input]) return false;
   }
   return true;
 }
@@ -91,20 +115,52 @@ function lookAt(eye,target,up){
     -(z[0]*eye[0]+z[1]*eye[1]+z[2]*eye[2]),1];
 }
 
-function modelMatrix(piece){
-  var world = cellToWorld(piece.row,piece.col);
-  var angle = orientationAngle(piece.type,piece.orientation);
+function cameraData(width,height,camera){
+  camera = camera || {yaw:0,pitch:.95};
+  var yaw = Number.isFinite(camera.yaw) ? camera.yaw : 0;
+  var pitch = Number.isFinite(camera.pitch) ? camera.pitch : .95;
+  var distance = Number.isFinite(camera.distance) ? camera.distance : 14;
+  var offsetY = Number.isFinite(camera.offsetY) ? camera.offsetY : 0;
+  var eye = [Math.sin(yaw)*distance*Math.cos(pitch),
+    distance*Math.sin(pitch), Math.cos(yaw)*distance*Math.cos(pitch)];
+  var forward = normalize3([-eye[0],-eye[1],-eye[2]]);
+  var right = normalize3([-forward[2],0,forward[0]]);
+  var up = [
+    right[1]*forward[2]-right[2]*forward[1],
+    right[2]*forward[0]-right[0]*forward[2],
+    right[0]*forward[1]-right[1]*forward[0]
+  ];
+  var projection = perspective(Math.PI/4,width/Math.max(height,1),.1,50);
+  projection[9] = 2 * offsetY / Math.max(height,1);
+  return {eye:eye,forward:forward,right:right,up:up,
+    viewProjection:multiply(projection,lookAt(eye,[0,0,0],[0,1,0]))};
+}
+
+function projectCell(row,col,width,height,camera){
+  var world = cellToWorld(row,col), matrix = cameraData(width,height,camera).viewProjection;
+  var x = matrix[0]*world.x + matrix[8]*world.z + matrix[12];
+  var y = matrix[1]*world.x + matrix[9]*world.z + matrix[13];
+  var w = matrix[3]*world.x + matrix[11]*world.z + matrix[15];
+  if(!Number.isFinite(w) || w <= 0) return null;
+  return {x:(x/w*.5+.5)*width, y:(.5-y/w*.5)*height};
+}
+
+function modelMatrix(piece,pose){
+  pose = pose || piece;
+  var world = cellToWorld(pose.row,pose.col);
+  var angle = orientationAngle(piece.type,pose.orientation);
   if(!Number.isFinite(angle)) angle = 0;
   var cos = Math.cos(angle), sin = Math.sin(angle), scale = 0.68;
   return [scale*cos,0,-scale*sin,0, 0,scale,0,0, scale*sin,0,scale*cos,0,
-    world.x,0.02,world.z,1];
+    world.x,0.02+(pose.height||0),world.z,1];
 }
 
 function create(options){
   options = options || {};
   var canvas = options.canvas;
   var state = {mode:"loading", reason:null};
-  var gl = null, program = null, resources = {}, board = null, disposed = false;
+  var gl = null, program = null, resources = {}, board = null, boardEdge = null, beam = null, ring = null, disposed = false;
+  var displayWidth = canvas && canvas.width || 1, displayHeight = canvas && canvas.height || 1;
   var locations = null;
 
   function fallback(reason){
@@ -127,21 +183,23 @@ function create(options){
   }
 
   function init(){
+    var vertex = null, fragment = null;
     try {
       if(!canvas || typeof canvas.getContext !== "function") throw new Error("canvas unavailable");
-      gl = canvas.getContext("webgl", {alpha:true, antialias:true});
+      gl = canvas.getContext("webgl", {alpha:true, antialias:true, preserveDrawingBuffer:true});
       if(!gl) throw new Error("WebGL unavailable");
-      var vertex = compile(gl.VERTEX_SHADER,
+      vertex = compile(gl.VERTEX_SHADER,
         "attribute vec3 aPosition; attribute vec3 aNormal; uniform mat4 uMvp; uniform mat4 uModel;" +
         "varying vec3 vNormal; void main(){vNormal=mat3(uModel)*aNormal;gl_Position=uMvp*vec4(aPosition,1.0);}");
-      var fragment = compile(gl.FRAGMENT_SHADER,
+      fragment = compile(gl.FRAGMENT_SHADER,
         "precision mediump float; varying vec3 vNormal; uniform vec4 uColor;" +
-        "void main(){float l=.35+.65*max(dot(normalize(vNormal),normalize(vec3(.3,.8,.5))),0.0);" +
+        "void main(){float l=.58+.42*max(dot(normalize(vNormal),normalize(vec3(.3,.8,.5))),0.0);" +
         "gl_FragColor=vec4(uColor.rgb*l,uColor.a);}");
       program = gl.createProgram();
       if(!program) throw new Error("program allocation failed");
       gl.attachShader(program, vertex); gl.attachShader(program, fragment); gl.linkProgram(program);
       gl.deleteShader(vertex); gl.deleteShader(fragment);
+      vertex = null; fragment = null;
       if(!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) || "program link failed");
       locations = {
         position:gl.getAttribLocation(program,"aPosition"),
@@ -155,8 +213,30 @@ function create(options){
       gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       board = createBoard();
+      boardEdge = createBoardEdge();
+      beam = createBeam();
+      ring = createRing();
       return true;
-    } catch(e){ return fallback(e); }
+    } catch(e){
+      if(gl && vertex) gl.deleteShader(vertex);
+      if(gl && fragment) gl.deleteShader(fragment);
+      return fallback(e);
+    }
+  }
+
+  function withBuffers(message, upload){
+    var item = {position:null, normal:null, index:null};
+    try {
+      item.position=gl.createBuffer(); item.normal=gl.createBuffer(); item.index=gl.createBuffer();
+      if(!item.position || !item.normal || !item.index) throw new Error(message);
+      upload(item);
+      return item;
+    } catch(e){
+      if(item.position) gl.deleteBuffer(item.position);
+      if(item.normal) gl.deleteBuffer(item.normal);
+      if(item.index) gl.deleteBuffer(item.index);
+      throw e;
+    }
   }
 
   function createBoard(){
@@ -168,31 +248,75 @@ function create(options){
       for(var n=0;n<4;n++) normals.push(0,1,0);
       indices.push(base,base+1,base+2, base,base+2,base+3);
     }
-    var position = gl.createBuffer(), normal = gl.createBuffer(), index = gl.createBuffer();
-    if(!position || !normal || !index) throw new Error("board buffer allocation failed");
-    gl.bindBuffer(gl.ARRAY_BUFFER,position);
+    return withBuffers("board buffer allocation failed",function(item){
+    gl.bindBuffer(gl.ARRAY_BUFFER,item.position);
     gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(positions),gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER,normal);
+    gl.bindBuffer(gl.ARRAY_BUFFER,item.normal);
     gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(normals),gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,index);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,item.index);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(indices),gl.STATIC_DRAW);
-    return {position:position,normal:normal,index:index};
+    });
+  }
+
+  function createBoardEdge(){
+    var positions=[
+      -5,0,-4, 5,0,-4, 5,-.24,-4, -5,-.24,-4,
+      5,0,-4, 5,0,4, 5,-.24,4, 5,-.24,-4,
+      5,0,4, -5,0,4, -5,-.24,4, 5,-.24,4,
+      -5,0,4, -5,0,-4, -5,-.24,-4, -5,-.24,4
+    ];
+    var normals=[]; for(var n=0;n<16;n++) normals.push(0,.25,.97);
+    var indices=[]; for(var side=0;side<4;side++){
+      var base=side*4; indices.push(base,base+1,base+2,base,base+2,base+3);
+    }
+    var item=withBuffers("board edge buffer allocation failed",function(buffers){
+      gl.bindBuffer(gl.ARRAY_BUFFER,buffers.position); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(positions),gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER,buffers.normal); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(normals),gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,buffers.index); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(indices),gl.STATIC_DRAW);
+    });
+    item.count=indices.length; return item;
+  }
+
+  function createBeam(){
+    return withBuffers("beam buffer allocation failed",function(item){
+    gl.bindBuffer(gl.ARRAY_BUFFER,item.normal);
+    gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([0,1,0,0,1,0,0,1,0,0,1,0]),gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,item.index);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array([0,1,2,0,2,3]),gl.STATIC_DRAW);
+    });
+  }
+
+  function createRing(){
+    var positions=[],normals=[],indices=[],segments=24,inner=.31,outer=.42;
+    for(var i=0;i<segments;i++){
+      var angle=i*Math.PI*2/segments,cos=Math.cos(angle),sin=Math.sin(angle);
+      positions.push(cos*inner,.035,sin*inner,cos*outer,.035,sin*outer);
+      normals.push(0,1,0,0,1,0);
+      var next=(i+1)%segments;
+      indices.push(i*2,i*2+1,next*2+1,i*2,next*2+1,next*2);
+    }
+    var item=withBuffers("ring buffer allocation failed",function(buffers){
+      gl.bindBuffer(gl.ARRAY_BUFFER,buffers.position); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(positions),gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER,buffers.normal); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(normals),gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,buffers.index); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(indices),gl.STATIC_DRAW);
+    });
+    item.count=indices.length; return item;
   }
 
   function uploadModel(key, model){
     resources[key] = [];
     model.meshes.forEach(function(mesh){
       mesh.primitives.forEach(function(primitive){
-        var position = gl.createBuffer(), normal = gl.createBuffer(), index = gl.createBuffer();
-        if(!position || !normal || !index) throw new Error("buffer allocation failed");
-        gl.bindBuffer(gl.ARRAY_BUFFER, position);
+        var item = withBuffers("buffer allocation failed",function(buffers){
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffers.position);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(primitive.positions), gl.STATIC_DRAW);
-        gl.bindBuffer(gl.ARRAY_BUFFER, normal);
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffers.normal);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(primitive.normals), gl.STATIC_DRAW);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers.index);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(primitive.indices), gl.STATIC_DRAW);
-        resources[key].push({position:position, normal:normal, index:index,
-          count:primitive.indices.length, material:primitive.material});
+        });
+        item.count=primitive.indices.length; item.material=primitive.material;
+        resources[key].push(item);
       });
     });
   }
@@ -209,7 +333,14 @@ function create(options){
       options.readAsset("games/laser/models/" + key + ".glb", function(error, data){
         if(disposed || failed) return;
         if(error){ failed = true; done(fallback(error), state.reason); return; }
-        try { uploadModel(key, GlbLoader.parseGlb(data)); }
+        try {
+          var model=GlbLoader.parseGlb(data);
+          if(key.indexOf("single_mirror_") === 0 || key.indexOf("double_mirror_") === 0){
+            var normals=GlbLoader.mirrorSurfaceNormals(model);
+            if(!validateMirrorDirections(normals[0])) throw new Error("mirror surface normal disagrees with game rules");
+          }
+          uploadModel(key, model);
+        }
         catch(e){ failed = true; done(fallback(e), state.reason); return; }
         pending--;
         if(!pending){ state = {mode:"ready", reason:null}; done(true); }
@@ -220,6 +351,9 @@ function create(options){
   function disposeResources(){
     if(gl){
       if(board){ gl.deleteBuffer(board.position); gl.deleteBuffer(board.normal); gl.deleteBuffer(board.index); }
+      if(boardEdge){ gl.deleteBuffer(boardEdge.position); gl.deleteBuffer(boardEdge.normal); gl.deleteBuffer(boardEdge.index); }
+      if(beam){ gl.deleteBuffer(beam.position); gl.deleteBuffer(beam.normal); gl.deleteBuffer(beam.index); }
+      if(ring){ gl.deleteBuffer(ring.position); gl.deleteBuffer(ring.normal); gl.deleteBuffer(ring.index); }
       Object.keys(resources).forEach(function(key){
         resources[key].forEach(function(item){
           if(item.position) gl.deleteBuffer(item.position);
@@ -229,7 +363,7 @@ function create(options){
       });
       if(program) gl.deleteProgram(program);
     }
-    resources = {}; board = null; program = null; locations = null;
+    resources = {}; board = null; boardEdge = null; beam = null; ring = null; program = null; locations = null;
   }
 
   function bindAttributes(part){
@@ -249,19 +383,67 @@ function create(options){
     return (row+col)%2 ? [0.20,0.22,0.28,1] : [0.29,0.32,0.39,1];
   }
 
+  function validPath(path){
+    if(!Array.isArray(path) || path.length < 2) return false;
+    for(var i=0;i<path.length;i++) if(!path[i] || !Number.isFinite(path[i].r) ||
+      !Number.isFinite(path[i].c)) return false;
+    return true;
+  }
+
+  function drawBeamSegment(a,b,width,viewProjection,color){
+    var aw=cellToWorld(a.r,a.c), bw=cellToWorld(b.r,b.c);
+    var dx=bw.x-aw.x,dz=bw.z-aw.z,length=Math.hypot(dx,dz);
+    if(!length) return;
+    var px=-dz/length*width,pz=dx/length*width,y=.34;
+    gl.bindBuffer(gl.ARRAY_BUFFER,beam.position);
+    gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([
+      aw.x+px,y,aw.z+pz, aw.x-px,y,aw.z-pz,
+      bw.x-px,y,bw.z-pz, bw.x+px,y,bw.z+pz
+    ]),gl.DYNAMIC_DRAW || gl.STATIC_DRAW);
+    bindAttributes(beam);
+    var model=identity();
+    gl.uniformMatrix4fv(locations.model,false,new Float32Array(model));
+    gl.uniformMatrix4fv(locations.mvp,false,new Float32Array(multiply(viewProjection,model)));
+    gl.uniform4fv(locations.color,new Float32Array(color));
+    gl.drawElements(gl.TRIANGLES,6,gl.UNSIGNED_SHORT,0);
+  }
+
+  function drawBeam(path,progress,viewProjection){
+    if(!validPath(path)) return;
+    progress = Number.isFinite(progress) ? Math.max(0,Math.min(1,progress)) : 1;
+    var upto = progress * (path.length - 1);
+    for(var i=0;i<path.length-1 && upto>i;i++){
+      var end = path[i+1], fraction = Math.min(1,upto-i);
+      if(fraction < 1) end = {
+        r:path[i].r+(end.r-path[i].r)*fraction,
+        c:path[i].c+(end.c-path[i].c)*fraction
+      };
+      gl.depthMask(false);
+      drawBeamSegment(path[i],end,.11,viewProjection,[1,.25,.03,.28]);
+      gl.depthMask(true);
+      drawBeamSegment(path[i],end,.035,viewProjection,[1,.93,.45,1]);
+    }
+  }
+
+  function drawRing(row,col,viewProjection,color){
+    if(!Number.isFinite(row) || !Number.isFinite(col)) return;
+    var world=cellToWorld(row,col),model=identity(); model[12]=world.x; model[14]=world.z;
+    bindAttributes(ring);
+    gl.uniformMatrix4fv(locations.model,false,new Float32Array(model));
+    gl.uniformMatrix4fv(locations.mvp,false,new Float32Array(multiply(viewProjection,model)));
+    gl.uniform4fv(locations.color,new Float32Array(color));
+    gl.drawElements(gl.TRIANGLES,ring.count,gl.UNSIGNED_SHORT,0);
+  }
+
   function render(scene){
     if(disposed || state.mode !== "ready") return false;
     try {
+      if(typeof gl.isContextLost === "function" && gl.isContextLost())
+        throw new Error("WebGL context lost");
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
       gl.useProgram(program);
-      var camera = scene.camera || {yaw:0,pitch:.95};
-      var distance = 14;
-      var eye = [Math.sin(camera.yaw||0)*distance*Math.cos(camera.pitch||.95),
-        distance*Math.sin(camera.pitch||.95),
-        Math.cos(camera.yaw||0)*distance*Math.cos(camera.pitch||.95)];
-      var projection = perspective(Math.PI/4,canvas.width/Math.max(canvas.height,1),.1,50);
-      var viewProjection = multiply(projection,lookAt(eye,[0,0,0],[0,1,0]));
+      var viewProjection = cameraData(displayWidth,displayHeight,scene.camera).viewProjection;
       var boardModel = identity();
       bindAttributes(board);
       gl.uniformMatrix4fv(locations.model,false,new Float32Array(boardModel));
@@ -270,10 +452,15 @@ function create(options){
         gl.uniform4fv(locations.color,new Float32Array(colorForCell(row,col)));
         gl.drawElements(gl.TRIANGLES,6,gl.UNSIGNED_SHORT,(row*COLS+col)*12);
       }
-      (scene.pieces || []).forEach(function(piece){
+      bindAttributes(boardEdge);
+      gl.uniform4fv(locations.color,new Float32Array([.08,.09,.13,1]));
+      gl.drawElements(gl.TRIANGLES,boardEdge.count,gl.UNSIGNED_SHORT,0);
+      (scene.pieces || []).forEach(function(piece,pieceIndex){
         if(!piece.alive) return;
         var parts = resources[pieceModelKey(piece)] || [];
-        var model = modelMatrix(piece);
+        var poses = scene.aiPose && scene.aiPose.poses;
+        var pose = poses && (poses[pieceIndex] || poses[String(pieceIndex)]);
+        var model = modelMatrix(piece,pose);
         gl.uniformMatrix4fv(locations.model,false,new Float32Array(model));
         gl.uniformMatrix4fv(locations.mvp,false,new Float32Array(multiply(viewProjection,model)));
         parts.forEach(function(part){
@@ -282,6 +469,14 @@ function create(options){
           gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_SHORT, 0);
         });
       });
+      if(scene.selected >= 0 && scene.pieces && scene.pieces[scene.selected]){
+        var selected=scene.pieces[scene.selected];
+        drawRing(selected.row,selected.col,viewProjection,[1,.82,.18,.85]);
+      }
+      (scene.targets || []).forEach(function(target){
+        drawRing(target.r,target.c,viewProjection,[.18,.65,1,.70]);
+      });
+      drawBeam(scene.path,scene.beamProgress,viewProjection);
       return true;
     } catch(e){ return fallback(e); }
   }
@@ -289,12 +484,33 @@ function create(options){
   function dispose(){ if(disposed) return; disposed = true; disposeResources(); }
   function resize(width,height,dpr){
     if(!canvas) return;
+    displayWidth = Math.max(1,width || 1); displayHeight = Math.max(1,height || 1);
     var scale = Math.min(Math.max(dpr || 1, 1), 2);
-    canvas.width = Math.max(1, Math.floor(width * scale));
-    canvas.height = Math.max(1, Math.floor(height * scale));
+    canvas.width = Math.max(1, Math.floor(displayWidth * scale));
+    canvas.height = Math.max(1, Math.floor(displayHeight * scale));
   }
 
-  return {load:load, render:render, pick:function(){ return null; }, resize:resize,
+  function pick(x,y,camera){
+    if(state.mode !== "ready" || !Number.isFinite(x) || !Number.isFinite(y) ||
+       x < 0 || y < 0 || x > displayWidth || y > displayHeight) return null;
+    var data = cameraData(displayWidth,displayHeight,camera);
+    var ndcX = x/displayWidth*2-1;
+    var offsetY = camera && Number.isFinite(camera.offsetY) ? camera.offsetY : 0;
+    var ndcY = 1-y/displayHeight*2 + 2*offsetY/displayHeight;
+    var tan = Math.tan(Math.PI/8), aspect = displayWidth/displayHeight;
+    var direction = normalize3([
+      data.forward[0] + data.right[0]*ndcX*tan*aspect + data.up[0]*ndcY*tan,
+      data.forward[1] + data.right[1]*ndcX*tan*aspect + data.up[1]*ndcY*tan,
+      data.forward[2] + data.right[2]*ndcX*tan*aspect + data.up[2]*ndcY*tan
+    ]);
+    if(Math.abs(direction[1]) < 1e-8) return null;
+    var distance = -data.eye[1]/direction[1];
+    if(distance <= 0 || !Number.isFinite(distance)) return null;
+    return worldToCell(data.eye[0]+direction[0]*distance,
+      data.eye[2]+direction[2]*distance);
+  }
+
+  return {load:load, render:render, pick:pick, resize:resize,
     dispose:dispose, status:function(){ return {mode:state.mode, reason:state.reason}; }};
 }
 
@@ -305,5 +521,6 @@ module.exports = {
   worldToCell:worldToCell,
   zoneCells:zoneCells,
   orientationAngle:orientationAngle,
-  validateMirrorDirections:validateMirrorDirections
+  validateMirrorDirections:validateMirrorDirections,
+  projectCell:projectCell
 };

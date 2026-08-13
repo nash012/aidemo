@@ -49,7 +49,19 @@ body { display:flex; align-items:center; justify-content:center; font-family:sys
   </div>
 </div>
 
-<script>var module = { exports: {} };</script>
+<script>
+var debugModules = {};
+var module = { exports: {} };
+function require(path) {
+  var key = path.replace(/^\.\//, '').replace(/\.js$/, '');
+  if (!debugModules[key]) throw new Error('Debug module not loaded: ' + path);
+  return debugModules[key];
+}
+</script>
+<script src="games/laser/glb-loader.js"></script>
+<script>debugModules['glb-loader'] = module.exports; module = { exports: {} };</script>
+<script src="games/laser/webgl-renderer.js"></script>
+<script>debugModules['webgl-renderer'] = module.exports; module = { exports: {} };</script>
 <script src="games/laser/laser-game.js"></script>
 <script>
 (function(){
@@ -86,10 +98,23 @@ body { display:flex; align-items:center; justify-content:center; font-family:sys
   }
   resize();
 
+  function debugPlatform() {
+    return {
+      createCanvas: function(){ return document.createElement('canvas'); },
+      readAsset: function(assetPath, done){
+        fetch(assetPath).then(function(response){
+          if (!response.ok) throw new Error('HTTP ' + response.status + ': ' + assetPath);
+          return response.arrayBuffer();
+        }).then(function(buffer){ done(null, buffer); }, done);
+      },
+      dpr: DPR
+    };
+  }
+
   // 创建游戏实例
   var game = LaserGame.create(ctx, W, H, function(){
     console.log('[debug] returnToMenu');
-  });
+  }, debugPlatform());
 
   // 窗口大小变化时重建
   var resizeTimer = null;
@@ -98,7 +123,7 @@ body { display:flex; align-items:center; justify-content:center; font-family:sys
     resizeTimer = setTimeout(function(){
       if (game.exit) game.exit();
       resize();
-      game = LaserGame.create(ctx, W, H, function(){});
+      game = LaserGame.create(ctx, W, H, function(){}, debugPlatform());
     }, 300);
   });
 
@@ -201,7 +226,7 @@ body { display:flex; align-items:center; justify-content:center; font-family:sys
   });
   document.getElementById('btn-restart').addEventListener('click', function(){
     if (game.exit) game.exit();
-    game = LaserGame.create(ctx, W, H, function(){});
+    game = LaserGame.create(ctx, W, H, function(){}, debugPlatform());
   });
 
   // ---- 主循环 ----
