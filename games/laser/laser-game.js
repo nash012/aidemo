@@ -109,7 +109,7 @@ module.exports = {
     }
 
     function pieceHeight(type) {
-      return { king:1.02, laser:0.65, shield:0.65, mirror:0.70, switch:0.65 }[type] || 0.6;
+      return { king:0.90, laser:0.60, shield:0.65, mirror:0.70, switch:0.65 }[type] || 0.6;
     }
 
     /* -------------------- 游戏逻辑（与2D版完全一致） -------------------- */
@@ -686,11 +686,12 @@ module.exports = {
       }
     }
 
-    function draw3DBox(cx, cz, w, d, h, topColor, baseColor){
+    function draw3DBox(cx, cz, w, d, h, topColor, baseColor, y0){
+      y0 = y0 || 0;
       var hw = w/2, hd = d/2;
       var verts = [
-        [-hw,0,-hd],[hw,0,-hd],[hw,0,hd],[-hw,0,hd],
-        [-hw,h,-hd],[hw,h,-hd],[hw,h,hd],[-hw,h,hd]
+        [-hw,y0,-hd],[hw,y0,-hd],[hw,y0,hd],[-hw,y0,hd],
+        [-hw,y0+h,-hd],[hw,y0+h,-hd],[hw,y0+h,hd],[-hw,y0+h,hd]
       ];
       var proj = verts.map(function(v){ return project3D(cx+v[0], v[1], cz+v[2]); });
       var dark = darkenColor(baseColor, 0.45);
@@ -887,44 +888,38 @@ module.exports = {
       ctx.restore();
     }
 
-    /* -------------------- 3D 单面镜 — 竖立三棱柱，一面为镜面 -------------------- */
+    /* -------------------- 3D 单面镜 — 方形底座+直角三棱柱+斜面镜+彩色边框 -------------------- */
     function drawMirrorPrism3D(wx, wz, orientation, baseColor, liteColor){
       var sq2 = Math.SQRT1_2;
-      var s = 0.72;       // 三角形缩放
+      var s = 0.70;
       var hw = 0.42, hd = 0.42;
-      var depth = s * hw * Math.SQRT2;  // 直角等腰三角形：depth = D/2，使两腿等长且直角在背面顶点
-      var h = 0.70;       // 棱柱高度
+      var depth = s * hw * Math.SQRT2;
+      var h = 0.58;
 
-      // project3D 中 z=-z 翻转了z轴，导致视觉对角线方向反转
-      // 因此 isSlash 逻辑与 MIRROR_MAP 相反：偶数ori(0,2)是"/"逻辑但视觉为"\"，需要 isSlash=false 得到"/"视觉
       var isSlash = (orientation % 2 === 1);
       var p;
       if (isSlash) p = [sq2, -sq2];
       else         p = [sq2,  sq2];
 
-      // 镜面朝向：需要根据 MIRROR_MAP 的折射方向确定哪一面是镜面
-      // ori=0: 折射RIGHT→UP,DOWN→LEFT → 镜面朝NW(top-left) → 背面在SE
-      // ori=1: 折射LEFT→UP,DOWN→RIGHT → 镜面朝NE(top-right) → 背面在SW
-      // ori=2: 折射LEFT→DOWN,UP→RIGHT → 镜面朝SE(bottom-right) → 背面在NW
-      // ori=3: 折射RIGHT→DOWN,UP→LEFT → 镜面朝SW(bottom-left) → 背面在NE
       var mirrorFront = (orientation >= 2) !== (orientation % 2 === 1);
-      var backSign = mirrorFront ? -1 : 1;  // 第三顶点在镜面背面
+      var backSign = mirrorFront ? -1 : 1;
 
-      // 镜面边缘两端点（沿对角线方向，缩放后靠近格子对角）
       var e1, e2;
       if (isSlash) { e1 = [-hw*s, -hd*s]; e2 = [ hw*s,  hd*s]; }
       else         { e1 = [ hw*s, -hd*s]; e2 = [-hw*s,  hd*s]; }
-      // 第三顶点（棱柱背面）
       var e3 = [p[0]*backSign*depth, p[1]*backSign*depth];
 
-      // 6顶点：底面3 + 顶面3
+      // 方形薄底座
+      draw3DBox(wx, wz, 0.70, 0.70, 0.05, darkenColor(baseColor, 0.5), darkenColor(baseColor, 0.4), 0);
+      var y0 = 0.05;
+
       var verts = [
-        [e1[0], 0, e1[1]],  // v0 底-镜面端1
-        [e2[0], 0, e2[1]],  // v1 底-镜面端2
-        [e3[0], 0, e3[1]],  // v2 底-背面顶点
-        [e1[0], h, e1[1]],  // v3 顶-镜面端1
-        [e2[0], h, e2[1]],  // v4 顶-镜面端2
-        [e3[0], h, e3[1]],  // v5 顶-背面顶点
+        [e1[0], y0, e1[1]],
+        [e2[0], y0, e2[1]],
+        [e3[0], y0, e3[1]],
+        [e1[0], y0+h, e1[1]],
+        [e2[0], y0+h, e2[1]],
+        [e3[0], y0+h, e3[1]],
       ];
       var proj = verts.map(function(v){ return project3D(wx+v[0], v[1], wz+v[2]); });
 
@@ -932,14 +927,13 @@ module.exports = {
       var mid = darkenColor(baseColor, 0.5);
       var vdark = darkenColor(baseColor, 0.2);
       var mirrorC = "rgba(200,240,255,0.92)";
-      var mirrorStroke = "rgba(150,210,240,0.6)";
 
       var faces = [
-        {v:[0,1,2], c:vdark, stroke:"rgba(0,0,0,0.3)", lw:1},              // 底面三角
-        {v:[3,5,4], c:mid, stroke:"rgba(0,0,0,0.35)", lw:1},               // 顶面三角
-        {v:[0,1,4,3], c:mirrorC, stroke:mirrorStroke, lw:1.5},             // 镜面（竖直矩形面）
-        {v:[0,3,5,2], c:dark, stroke:"rgba(0,0,0,0.3)", lw:1},            // 背面1
-        {v:[1,2,5,4], c:dark, stroke:"rgba(0,0,0,0.3)", lw:1},            // 背面2
+        {v:[0,1,2], c:vdark, stroke:"rgba(0,0,0,0.3)", lw:1},
+        {v:[3,5,4], c:mid, stroke:"rgba(0,0,0,0.35)", lw:1},
+        {v:[0,1,4,3], c:mirrorC, stroke:liteColor, lw:2.5},             // 镜面+彩色边框
+        {v:[0,3,5,2], c:dark, stroke:"rgba(0,0,0,0.3)", lw:1},
+        {v:[1,2,5,4], c:dark, stroke:"rgba(0,0,0,0.3)", lw:1},
       ];
 
       draw3DFaces(faces, proj);
@@ -954,32 +948,58 @@ module.exports = {
       ctx.stroke();
     }
 
-    /* -------------------- 3D 双面镜（Switch）— 竖直长方体，两面均镜面 -------------------- */
+    /* -------------------- 3D 双面镜 — 阶梯圆底座+竖直薄板+圆柱旋钮+双镜面 -------------------- */
     function drawSwitchPrism3D(wx, wz, orientation, baseColor, liteColor){
       var sq2 = Math.SQRT1_2;
-      var bw = 0.30;   // 沿对角线半宽
-      var bh = 0.65;   // 高度
-      var bt = 0.08;   // 垂直于对角线的半厚
+      var bw = 0.26;
+      var bh = 0.50;
+      var bt = 0.06;
+      var segs = 10;
 
-      // project3D 中 z=-z 翻转了z轴，isSlash 逻辑与折射表相反
+      // 阶梯圆形底座
+      function drawCyl(cy, r, h, color, topC) {
+        var bProj = [], bFaces = [];
+        for (var i = 0; i < segs; i++) {
+          var a = (i / segs) * Math.PI * 2;
+          bProj.push(project3D(wx + Math.cos(a) * r, cy, wz + Math.sin(a) * r));
+        }
+        for (var j = 0; j < segs; j++) {
+          var a2 = (j / segs) * Math.PI * 2;
+          bProj.push(project3D(wx + Math.cos(a2) * r, cy + h, wz + Math.sin(a2) * r));
+        }
+        for (var k = 0; k < segs; k++) {
+          var ni = (k + 1) % segs;
+          var shade = 0.35 + 0.35 * Math.abs(Math.cos((k / segs) * Math.PI * 2));
+          bFaces.push({ v: [k, ni, ni + segs, k + segs], c: darkenColor(color, shade * 0.7), stroke: "rgba(0,0,0,0.2)", lw: 0.5 });
+        }
+        var topV = [];
+        for (var m = 0; m < segs; m++) topV.push(m + segs);
+        bFaces.push({ v: topV, c: topC, stroke: "rgba(0,0,0,0.3)", lw: 1 });
+        draw3DFaces(bFaces, bProj);
+      }
+      drawCyl(0,    0.36, 0.04, darkenColor(baseColor, 0.35), darkenColor(baseColor, 0.5));
+      drawCyl(0.04, 0.27, 0.04, darkenColor(baseColor, 0.5), darkenColor(baseColor, 0.6));
+      var baseH = 0.08;
+
+      // 镜体参数
       var isSlash = (orientation % 2 === 1);
-      var d, p;
-      if (isSlash) { d = [sq2, sq2];  p = [sq2, -sq2]; }
-      else         { d = [sq2, -sq2]; p = [sq2,  sq2]; }
+      var d, perp;
+      if (isSlash) { d = [sq2, sq2];  perp = [sq2, -sq2]; }
+      else         { d = [sq2, -sq2]; perp = [sq2,  sq2]; }
 
       function vert(ds, ps, y) {
-        return [d[0]*ds + p[0]*ps, y, d[1]*ds + p[1]*ps];
+        return [d[0]*ds + perp[0]*ps, y, d[1]*ds + perp[1]*ps];
       }
 
-      // 长方体8顶点
-      var v0 = vert(-bw, -bt, 0);
-      var v1 = vert(-bw,  bt, 0);
-      var v2 = vert( bw, -bt, 0);
-      var v3 = vert( bw,  bt, 0);
-      var v4 = vert(-bw, -bt, bh);
-      var v5 = vert(-bw,  bt, bh);
-      var v6 = vert( bw, -bt, bh);
-      var v7 = vert( bw,  bt, bh);
+      var bodyY = baseH;
+      var v0 = vert(-bw, -bt, bodyY);
+      var v1 = vert(-bw,  bt, bodyY);
+      var v2 = vert( bw, -bt, bodyY);
+      var v3 = vert( bw,  bt, bodyY);
+      var v4 = vert(-bw, -bt, bodyY+bh);
+      var v5 = vert(-bw,  bt, bodyY+bh);
+      var v6 = vert( bw, -bt, bodyY+bh);
+      var v7 = vert( bw,  bt, bodyY+bh);
 
       var allVerts = [v0,v1,v2,v3,v4,v5,v6,v7];
       var proj = allVerts.map(function(v){ return project3D(wx+v[0], v[1], wz+v[2]); });
@@ -988,20 +1008,47 @@ module.exports = {
       var mid = darkenColor(baseColor, 0.5);
       var vdark = darkenColor(baseColor, 0.2);
       var mirrorC = "rgba(200,240,255,0.92)";
-      var mirrorStroke = "rgba(150,210,240,0.6)";
 
       var faces = [
-        {v:[1,3,7,5], c:mirrorC, stroke:mirrorStroke, lw:1.5},            // 前面（镜面）
-        {v:[0,4,6,2], c:mirrorC, stroke:mirrorStroke, lw:1.5},            // 后面（镜面）
-        {v:[0,1,5,4], c:liteColor, stroke:"rgba(0,0,0,0.35)", lw:1},     // 左端面
-        {v:[2,6,7,3], c:mid, stroke:"rgba(0,0,0,0.35)", lw:1},           // 右端面
-        {v:[4,5,7,6], c:dark, stroke:"rgba(0,0,0,0.3)", lw:1},           // 顶面
-        {v:[0,2,3,1], c:vdark, stroke:"rgba(0,0,0,0.3)", lw:1},          // 底面
+        {v:[1,3,7,5], c:mirrorC, stroke:liteColor, lw:2},            // 前镜面+彩色边框
+        {v:[0,4,6,2], c:mirrorC, stroke:liteColor, lw:2},            // 后镜面+彩色边框
+        {v:[0,1,5,4], c:liteColor, stroke:"rgba(0,0,0,0.35)", lw:1}, // 左端面
+        {v:[2,6,7,3], c:mid, stroke:"rgba(0,0,0,0.35)", lw:1},       // 右端面
+        {v:[4,5,7,6], c:dark, stroke:"rgba(0,0,0,0.3)", lw:1},       // 顶面
+        {v:[0,2,3,1], c:vdark, stroke:"rgba(0,0,0,0.3)", lw:1},       // 底面
       ];
-
       draw3DFaces(faces, proj);
 
-      // 双面镜面高光线
+      // 侧旋钮（圆柱形，沿d方向）
+      var knobY = bodyY + bh * 0.45;
+      var knobR = 0.05;
+      var knobOff = bw * 0.95;
+      var knobLen = 0.08;
+      function drawKnob(kcx, kcz) {
+        var kProj = [], kFaces = [];
+        for (var ki = 0; ki < 8; ki++) {
+          var ka = (ki/8)*Math.PI*2;
+          var kpx = perp[0]*Math.cos(ka)*knobR;
+          var kpz = perp[1]*Math.cos(ka)*knobR;
+          var kpy = Math.sin(ka)*knobR;
+          kProj.push(project3D(kcx - d[0]*knobLen*0.5 + kpx, knobY + kpy, kcz - d[1]*knobLen*0.5 + kpz));
+          kProj.push(project3D(kcx + d[0]*knobLen*0.5 + kpx, knobY + kpy, kcz + d[1]*knobLen*0.5 + kpz));
+        }
+        for (var kf = 0; kf < 8; kf++) {
+          var kni = (kf+1)%8;
+          var kshade = 0.3 + 0.4*Math.abs(Math.cos((kf/8)*Math.PI*2));
+          kFaces.push({v:[kf*2, kf*2+1, kni*2+1, kni*2], c:darkenColor("#5a5a6e", kshade), stroke:"rgba(0,0,0,0.2)", lw:0.5});
+        }
+        // 外端面
+        var endV = [];
+        for (var ef = 0; ef < 8; ef++) endV.push(ef*2+1);
+        kFaces.push({v: endV, c: "#3a3a4e", stroke:"rgba(0,0,0,0.3)", lw:1});
+        draw3DFaces(kFaces, kProj);
+      }
+      drawKnob(wx + d[0]*knobOff, wz + d[1]*knobOff);
+      drawKnob(wx - d[0]*knobOff, wz - d[1]*knobOff);
+
+      // 镜面高光线
       ctx.strokeStyle = "rgba(255,255,255,0.4)";
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -1014,103 +1061,300 @@ module.exports = {
       ctx.stroke();
     }
 
-    /* -------------------- 3D 圆柱激光炮台 -------------------- */
+    /* -------------------- 3D 激光炮 — 圆盘底座+方形炮塔+圆柱炮管+同心环透镜 -------------------- */
     function drawLaserCylinder3D(wx, wz, orientation, baseColor, liteColor){
-      var r = 0.32, h = 0.5;
+      var segs = 12;
+      var isRed = (baseColor === "#cc2020");
+      var lensColor = isRed ? "rgba(255,120,30,0.85)" : "rgba(80,180,255,0.85)";
+      var lensGlow = isRed ? "rgba(255,200,80,0.6)" : "rgba(120,220,255,0.6)";
+      var metalC = "#4a4a5e";
+      var metalD = "#2a2a3e";
+
+      function drawCyl(cy, r, h, color, topC) {
+        var bProj = [], bFaces = [];
+        for (var i = 0; i < segs; i++) {
+          var a = (i / segs) * Math.PI * 2;
+          bProj.push(project3D(wx + Math.cos(a) * r, cy, wz + Math.sin(a) * r));
+        }
+        for (var j = 0; j < segs; j++) {
+          var a2 = (j / segs) * Math.PI * 2;
+          bProj.push(project3D(wx + Math.cos(a2) * r, cy + h, wz + Math.sin(a2) * r));
+        }
+        for (var k = 0; k < segs; k++) {
+          var ni = (k + 1) % segs;
+          var shade = 0.35 + 0.35 * Math.abs(Math.cos((k / segs) * Math.PI * 2));
+          bFaces.push({ v: [k, ni, ni + segs, k + segs], c: darkenColor(color, shade * 0.7), stroke: "rgba(0,0,0,0.2)", lw: 0.5 });
+        }
+        var topV = [];
+        for (var m = 0; m < segs; m++) topV.push(m + segs);
+        bFaces.push({ v: topV, c: topC, stroke: "rgba(0,0,0,0.3)", lw: 1 });
+        draw3DFaces(bFaces, bProj);
+      }
+
+      // 1. 圆盘底座
+      var baseR = 0.36, baseH = 0.08;
+      drawCyl(0, baseR, baseH, darkenColor(baseColor, 0.4), darkenColor(baseColor, 0.5));
+
+      // 2. 隆起边缘
+      drawCyl(baseH, 0.30, 0.03, darkenColor(baseColor, 0.5), darkenColor(baseColor, 0.6));
+
+      // 3. 方形炮塔
+      var turretW = 0.40, turretH = 0.26;
+      var turretY = baseH + 0.03;
+      draw3DBox(wx, wz, turretW, turretW, turretH, liteColor, baseColor, turretY);
+
+      // 4. 顶部小圆台
+      drawCyl(turretY + turretH, 0.14, 0.04, metalC, metalD);
+
+      // 5. 圆柱炮管
+      var dir = orientation;
+      var dx = DX[dir], dz = DY[dir];
+      var barrelLen = 0.24, barrelR = 0.07;
+      var barrelMidY = turretY + turretH * 0.5;
+      var barrelStartX = wx + dx * (turretW/2);
+      var barrelStartZ = wz + dz * (turretW/2);
+      var barrelEndX = wx + dx * (turretW/2 + barrelLen);
+      var barrelEndZ = wz + dz * (turretW/2 + barrelLen);
+
+      var bProj = [], bFaces = [];
+      for (var bi = 0; bi < segs; bi++) {
+        var ba = (bi / segs) * Math.PI * 2;
+        var perpX = -dz * Math.cos(ba) * barrelR;
+        var perpZ = dx * Math.cos(ba) * barrelR;
+        var perpY = Math.sin(ba) * barrelR;
+        bProj.push(project3D(barrelStartX + perpX, barrelMidY + perpY, barrelStartZ + perpZ));
+        bProj.push(project3D(barrelEndX + perpX, barrelMidY + perpY, barrelEndZ + perpZ));
+      }
+      for (var bk = 0; bk < segs; bk++) {
+        var bni = (bk + 1) % segs;
+        var bshade = 0.3 + 0.4 * Math.abs(Math.cos((bk / segs) * Math.PI * 2));
+        bFaces.push({ v: [bk*2, bk*2+1, bni*2+1, bni*2], c: darkenColor(metalC, bshade), stroke: "rgba(0,0,0,0.2)", lw: 0.5 });
+      }
+      var frontV = [];
+      for (var bf = 0; bf < segs; bf++) frontV.push(bf*2+1);
+      bFaces.push({ v: frontV, c: "#1a1a2e", stroke: "rgba(0,0,0,0.4)", lw: 1 });
+      draw3DFaces(bFaces, bProj);
+
+      // 6. 透镜（炮口圆形，带同心环）
+      var lensProj = project3D(barrelEndX, barrelMidY, barrelEndZ);
+      var lensR = lensProj.s * 0.08;
+
+      ctx.fillStyle = metalD;
+      ctx.beginPath();
+      ctx.arc(lensProj.x, lensProj.y, lensR * 1.3, 0, 6.283);
+      ctx.fill();
+
+      ctx.fillStyle = "#0a0a1a";
+      ctx.beginPath();
+      ctx.arc(lensProj.x, lensProj.y, lensR, 0, 6.283);
+      ctx.fill();
+
+      for (var ri = 3; ri >= 1; ri--) {
+        ctx.strokeStyle = ri === 1 ? lensColor : "rgba(80,80,100,0.5)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(lensProj.x, lensProj.y, lensR * ri / 3, 0, 6.283);
+        ctx.stroke();
+      }
+
+      var lg = ctx.createRadialGradient(lensProj.x, lensProj.y, 0, lensProj.x, lensProj.y, lensR * 0.7);
+      lg.addColorStop(0, lensGlow);
+      lg.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = lg;
+      ctx.beginPath();
+      ctx.arc(lensProj.x, lensProj.y, lensR * 0.7, 0, 6.283);
+      ctx.fill();
+
+      // 7. 侧旋钮
+      var perpDx = -dz, perpDz = dx;
+      var knobOff = turretW * 0.55;
+      draw3DBox(wx + perpDx * knobOff, wz + perpDz * knobOff, 0.07, 0.07, 0.07, "#5a5a6e", "#3a3a4e", turretY + turretH * 0.35);
+      draw3DBox(wx - perpDx * knobOff, wz - perpDz * knobOff, 0.07, 0.07, 0.07, "#5a5a6e", "#3a3a4e", turretY + turretH * 0.35);
+    }
+
+    /* -------------------- 3D 国王 — 阶梯圆底座+锥形塔身+金腰带+宝石王冠+十字 -------------------- */
+    function drawKingTower3D(wx, wz, baseColor, liteColor){
+      var isRed = (baseColor === "#cc2020");
+      var goldC = isRed ? "#ffd700" : "#c0c0c0";
+      var goldD = isRed ? "#daa520" : "#808080";
+      var jewelC = isRed ? "#ff4444" : "#4488ff";
+      var finialC = isRed ? "#ff4a4a" : "#3a8aff";
+      var finialD = isRed ? "#cc2020" : "#1a4ad0";
+      var segs = 12;
+      var allProj = [], allFaces = [];
+
+      function addCyl(cy, r, h, color, topC) {
+        var baseIdx = allProj.length;
+        for (var i = 0; i < segs; i++) {
+          var a = (i / segs) * Math.PI * 2;
+          allProj.push(project3D(wx + Math.cos(a) * r, cy, wz + Math.sin(a) * r));
+        }
+        for (var j = 0; j < segs; j++) {
+          var a2 = (j / segs) * Math.PI * 2;
+          allProj.push(project3D(wx + Math.cos(a2) * r, cy + h, wz + Math.sin(a2) * r));
+        }
+        for (var k = 0; k < segs; k++) {
+          var ni = (k + 1) % segs;
+          var shade = 0.35 + 0.35 * Math.abs(Math.cos((k / segs) * Math.PI * 2));
+          allFaces.push({ v: [baseIdx + k, baseIdx + ni, baseIdx + ni + segs, baseIdx + k + segs], c: darkenColor(color, shade), stroke: "rgba(0,0,0,0.2)", lw: 0.5 });
+        }
+        var topV = [];
+        for (var m = 0; m < segs; m++) topV.push(baseIdx + m + segs);
+        allFaces.push({ v: topV, c: topC, stroke: "rgba(0,0,0,0.3)", lw: 1 });
+      }
+
+      // 阶梯圆形底座
+      addCyl(0,    0.34, 0.06, darkenColor(baseColor, 0.4), darkenColor(baseColor, 0.5));
+      addCyl(0.06, 0.26, 0.04, darkenColor(baseColor, 0.5), darkenColor(baseColor, 0.6));
+
+      // 锥形塔身（底宽顶窄，有腹部凸起）
+      addCyl(0.10, 0.20, 0.14, baseColor, liteColor);
+      addCyl(0.24, 0.23, 0.06, baseColor, liteColor);  // 腹部
+      addCyl(0.30, 0.18, 0.10, baseColor, liteColor);  // 收颈
+
+      // 金色腰带
+      addCyl(0.40, 0.22, 0.04, goldC, goldD);
+
+      // 王冠基座（宽于颈部）
+      var crownY = 0.44;
+      addCyl(crownY, 0.24, 0.06, goldC, goldD);
+      draw3DFaces(allFaces, allProj);
+
+      // 王冠尖头（4方向小柱）
+      var crownTopY = crownY + 0.06;
+      var crownR = 0.24;
+      for (var ci = 0; ci < 4; ci++) {
+        var ca = (ci / 4) * Math.PI * 2;
+        var cx = wx + Math.cos(ca) * crownR;
+        var cz = wz + Math.sin(ca) * crownR;
+        draw3DBox(cx, cz, 0.06, 0.06, 0.08, goldC, goldD, crownTopY);
+      }
+
+      // 王冠宝石（4颗小球）
+      for (var ji = 0; ji < 4; ji++) {
+        var ja = (ji / 4) * Math.PI * 2;
+        var jx = wx + Math.cos(ja) * crownR;
+        var jz = wz + Math.sin(ja) * crownR;
+        var jProj = project3D(jx, crownTopY + 0.08, jz);
+        var jR = jProj.s * 0.04;
+        ctx.fillStyle = jewelC;
+        ctx.beginPath();
+        ctx.arc(jProj.x, jProj.y, jR, 0, 6.283);
+        ctx.fill();
+        ctx.fillStyle = "rgba(255,255,255,0.5)";
+        ctx.beginPath();
+        ctx.arc(jProj.x - jR*0.3, jProj.y - jR*0.3, jR*0.3, 0, 6.283);
+        ctx.fill();
+      }
+
+      // 十字尖顶
+      var crossY = crownTopY + 0.08;
+      draw3DBox(wx, wz, 0.05, 0.05, 0.12, finialC, finialD, crossY);
+      draw3DBox(wx, wz + 0.05, 0.12, 0.035, 0.035, finialC, finialD, crossY + 0.04);
+    }
+
+    /* -------------------- 3D 护盾 — 圆盘底座+A型支架+盾牌+金框+铆钉 -------------------- */
+    function drawShieldBlock3D(wx, wz, orientation, baseColor, liteColor){
+      var isRed = (baseColor === "#cc2020");
+      var goldC = isRed ? "#ffd700" : "#c0c0c0";
+      var goldD = isRed ? "#daa520" : "#808080";
       var segs = 10;
+
+      // 1. 圆盘底座
+      function drawCyl(cy, r, h, color, topC) {
+        var bProj = [], bFaces = [];
+        for (var i = 0; i < segs; i++) {
+          var a = (i / segs) * Math.PI * 2;
+          bProj.push(project3D(wx + Math.cos(a) * r, cy, wz + Math.sin(a) * r));
+        }
+        for (var j = 0; j < segs; j++) {
+          var a2 = (j / segs) * Math.PI * 2;
+          bProj.push(project3D(wx + Math.cos(a2) * r, cy + h, wz + Math.sin(a2) * r));
+        }
+        for (var k = 0; k < segs; k++) {
+          var ni = (k + 1) % segs;
+          var shade = 0.35 + 0.35 * Math.abs(Math.cos((k / segs) * Math.PI * 2));
+          bFaces.push({ v: [k, ni, ni + segs, k + segs], c: darkenColor(color, shade * 0.6), stroke: "rgba(0,0,0,0.2)", lw: 0.5 });
+        }
+        var topV = [];
+        for (var m = 0; m < segs; m++) topV.push(m + segs);
+        bFaces.push({ v: topV, c: topC, stroke: "rgba(0,0,0,0.3)", lw: 1 });
+        draw3DFaces(bFaces, bProj);
+      }
+      var baseR = 0.34, baseH = 0.05;
+      drawCyl(0, baseR, baseH, darkenColor(baseColor, 0.4), darkenColor(baseColor, 0.5));
+
+      // 2. A型支架（后方两根斜撑）
+      var dx = DX[orientation], dz = DY[orientation];
+      var perpX = -dz, perpZ = dx;
+      var thick = 0.05;
+      var halfW = 0.22;
+      var shieldH = 0.48;
+      var shieldY = baseH;
+      var standOff = 0.14;
+
+      var standW = 0.04, standD = 0.04;
+      var standH = shieldH * 0.7;
+      var lsx = wx + dx * standOff - perpX * halfW * 0.5;
+      var lsz = wz + dz * standOff - perpZ * halfW * 0.5;
+      draw3DBox(lsx, lsz, standW, standD, standH, goldD, darkenColor(goldD, 0.5), baseH);
+      var rsx = wx + dx * standOff + perpX * halfW * 0.5;
+      var rsz = wz + dz * standOff + perpZ * halfW * 0.5;
+      draw3DBox(rsx, rsz, standW, standD, standH, goldD, darkenColor(goldD, 0.5), baseH);
+
+      // 3. 竖立盾牌（heater shield 形状）
+      var outline = [
+        [-halfW,       shieldH],
+        [ halfW,       shieldH],
+        [ halfW * 0.82, shieldH * 0.5],
+        [ 0,           0],
+        [-halfW * 0.82, shieldH * 0.5]
+      ];
+
       var proj = [];
-      for(var i=0;i<segs;i++){
-        var a = (i/segs)*Math.PI*2;
-        proj.push(project3D(wx+Math.cos(a)*r, 0, wz+Math.sin(a)*r));
+      for (var fi = 0; fi < 5; fi++) {
+        var lx = outline[fi][0], ly = outline[fi][1];
+        var px = wx + lx * perpX + (thick * 0.5) * dx;
+        var pz = wz + lx * perpZ + (thick * 0.5) * dz;
+        proj.push(project3D(px, shieldY + ly, pz));
       }
-      for(var j=0;j<segs;j++){
-        var a2 = (j/segs)*Math.PI*2;
-        proj.push(project3D(wx+Math.cos(a2)*r, h, wz+Math.sin(a2)*r));
+      for (var bi2 = 0; bi2 < 5; bi2++) {
+        var lx2 = outline[bi2][0], ly2 = outline[bi2][1];
+        var bx2 = wx + lx2 * perpX - (thick * 0.5) * dx;
+        var bz2 = wz + lx2 * perpZ - (thick * 0.5) * dz;
+        proj.push(project3D(bx2, shieldY + ly2, bz2));
       }
-      var faces = [];
-      for(var k=0;k<segs;k++){
-        var ni = (k+1)%segs;
-        var shade = 0.35 + 0.35 * Math.abs(Math.cos((k/segs)*Math.PI*2));
-        faces.push({v:[k,ni,ni+segs,k+segs], c:darkenColor(baseColor, shade), stroke:"rgba(0,0,0,0.2)", lw:0.5});
-      }
-      var topV = [];
-      for(var m=0;m<segs;m++) topV.push(m+segs);
-      faces.push({v:topV, c:liteColor, stroke:"rgba(0,0,0,0.3)", lw:1});
+
+      var silverC = "rgba(225,230,245,0.95)";
+      var silverD = "#778";
+      var faces = [
+        {v:[0,1,2,3,4], c:silverC, stroke:"rgba(0,0,0,0.3)", lw:1.5},
+        {v:[5,9,8,7,6], c:darkenColor(silverD, 0.5), stroke:"rgba(0,0,0,0.3)", lw:1},
+        {v:[0,5,6,1], c:darkenColor(silverD, 0.7), stroke:"rgba(0,0,0,0.3)", lw:1},
+        {v:[1,6,7,2], c:darkenColor(silverD, 0.6), stroke:"rgba(0,0,0,0.3)", lw:1},
+        {v:[2,7,8,3], c:darkenColor(silverD, 0.5), stroke:"rgba(0,0,0,0.3)", lw:1},
+        {v:[3,8,9,4], c:darkenColor(silverD, 0.4), stroke:"rgba(0,0,0,0.3)", lw:1},
+        {v:[4,9,5,0], c:darkenColor(silverD, 0.6), stroke:"rgba(0,0,0,0.3)", lw:1},
+      ];
       draw3DFaces(faces, proj);
 
-      // 炮管（矩形指向激光方向）
-      var dir = orientation;
-      var barrelLen = 0.35, barrelW = 0.14;
-      var dx = DX[dir], dz = DY[dir]; // 世界坐标方向（project3D内部会处理z翻转）
-      var bx = wx + dx * barrelLen * 0.5;
-      var bz = wz + dz * barrelLen * 0.5;
-      var ph2 = h + 0.15;
-      // 根据朝向决定炮管的长宽方向：水平方向时宽=长、深=窄；垂直方向时宽=窄、深=长
-      var bw = (dx !== 0) ? barrelLen : barrelW;
-      var bd = (dx !== 0) ? barrelW : barrelLen;
-      draw3DBox(bx, bz, bw, bd, ph2, "#4a4a5e", "#2a2a3e");
-
-      // 发射口光晕
-      var tipX = wx + dx * barrelLen;
-      var tipZ = wz + dz * barrelLen;
-      var tipProj = project3D(tipX, h + 0.2, tipZ);
-      var g = ctx.createRadialGradient(tipProj.x, tipProj.y, 0, tipProj.x, tipProj.y, tipProj.s * 0.2);
-      g.addColorStop(0, "rgba(255,255,200,0.9)");
-      g.addColorStop(0.5, "rgba(255,180,50,0.5)");
-      g.addColorStop(1, "rgba(255,100,0,0)");
-      ctx.fillStyle = g;
+      // 4. 金色边框
+      ctx.strokeStyle = goldC;
+      ctx.lineWidth = 2.5;
       ctx.beginPath();
-      ctx.arc(tipProj.x, tipProj.y, tipProj.s * 0.2, 0, 6.283);
-      ctx.fill();
-    }
+      ctx.moveTo(proj[0].x, proj[0].y);
+      for (var gi = 1; gi < 5; gi++) ctx.lineTo(proj[gi].x, proj[gi].y);
+      ctx.closePath();
+      ctx.stroke();
 
-    /* -------------------- 3D 国王塔楼 -------------------- */
-    function drawKingTower3D(wx, wz, baseColor, liteColor){
-      drawComposite3D(wx, wz, [
-        {w:0.72, d:0.72, y0:0,    h:0.12, topColor:liteColor, baseColor:baseColor},
-        {w:0.54, d:0.54, y0:0.12, h:0.55, topColor:liteColor, baseColor:baseColor},
-        {w:0.60, d:0.60, y0:0.67, h:0.10, topColor:"#ffd700", baseColor:"#daa520"},
-        {w:0.20, d:0.20, y0:0.77, h:0.25, topColor:"#ff4a4a", baseColor:"#cc2020"}
-      ]);
-    }
-
-    /* -------------------- 3D 护盾 — 锥形盾体+金属面板+金色盾心 -------------------- */
-    function drawShieldBlock3D(wx, wz, orientation, baseColor, liteColor){
-      var hw = 0.36, hd = 0.28;
-      var frontC = "rgba(225,230,245,0.95)";
-
-      // 锥形盾体（下宽上窄，模拟盾牌轮廓）
-      drawComposite3D(wx, wz, [
-        {w:0.72, d:0.56, y0:0,    h:0.10, topColor:liteColor, baseColor:baseColor},
-        {w:0.68, d:0.56, y0:0.10, h:0.22, topColor:liteColor, baseColor:baseColor},
-        {w:0.54, d:0.56, y0:0.32, h:0.18, topColor:liteColor, baseColor:baseColor},
-        {w:0.34, d:0.56, y0:0.50, h:0.15, topColor:liteColor, baseColor:baseColor}
-      ]);
-
-      // 朝向方向的前金属面板
-      var dx = DX[orientation], dz = DY[orientation];
-      var plateCX = wx, plateCZ = wz, plateW, plateD;
-      if(dz !== 0){
-        plateW = 0.58; plateD = 0.06;
-        plateCZ = wz + dz * (hd + plateD/2);
-      } else {
-        plateW = 0.06; plateD = 0.58;
-        plateCX = wx + dx * (hw + plateW/2);
-      }
-      drawComposite3D(plateCX, plateCZ, [
-        {w:plateW, d:plateD, y0:0.04, h:0.55, topColor:frontC, baseColor:"#778"}
-      ]);
-
-      // 盾心凸起（金色铆钉）
-      var bossCX = wx, bossCZ = wz, bossW = 0.16, bossD = 0.16;
-      if(dz !== 0){
-        bossCZ = wz + dz * (hd + bossD/2);
-      } else {
-        bossCX = wx + dx * (hw + bossW/2);
-      }
-      drawComposite3D(bossCX, bossCZ, [
-        {w:bossW, d:bossD, y0:0.18, h:0.22, topColor:"#ffd700", baseColor:"#daa520"}
-      ]);
+      // 5. 中央铆钉
+      var bossOff = thick * 0.5 + 0.01;
+      draw3DBox(
+        wx + dx * bossOff, wz + dz * bossOff,
+        0.10, 0.10, 0.08,
+        goldC, goldD,
+        shieldY + shieldH * 0.35
+      );
     }
 
     function drawIconKing(){
