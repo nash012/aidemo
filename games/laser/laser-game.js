@@ -613,11 +613,16 @@ module.exports = {
     function webglCamera(){
       var cos=Math.abs(Math.cos(cam.yaw)), sin=Math.abs(Math.sin(cam.yaw));
       var halfWidth=cos*5.65+sin*4.65;
-      var matchDistance=Math.max(26,26*halfWidth/5.65);
+      var referenceAspect=375/667;
+      var screenAspect=SW/Math.max(SH,1);
+      var tallScreenScale=Math.max(1,referenceAspect/screenAspect);
+      var setupDistance=27*tallScreenScale;
+      var matchBaseDistance=26*tallScreenScale;
+      var matchDistance=Math.max(matchBaseDistance,matchBaseDistance*halfWidth/5.65);
       return {
         yaw:cam.yaw,
         pitch:cam.pitch,
-        distance:G.screen === "setup" ? 27 : matchDistance,
+        distance:G.screen === "setup" ? setupDistance : matchDistance,
         offsetY:G.screen === "setup" ? -90 : (boardAreaTop+boardAreaBot-SH)/2-7
       };
     }

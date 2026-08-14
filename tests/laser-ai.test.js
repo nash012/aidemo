@@ -372,6 +372,19 @@ assert.ok(Math.min.apply(null,fittedCorners.map(function(point){return point.x;}
   Math.max.apply(null,fittedCorners.map(function(point){return point.x;}))<=345,
   "all four board corners must retain horizontal room for full 3D pieces");
 
+var tallGame=LaserGame.create(fakeContext(),430,932,function(){});
+tallGame._debugGame.beginMatch();
+var tallCamera=tallGame._debugGame.snapshot().webglCamera;
+assert.ok(tallCamera.distance>30,
+  "modern tall phones must increase camera distance from their real aspect ratio");
+var tallCorners=[[0,0],[0,9],[7,0],[7,9]].map(function(cell){
+  return WebGLRenderer.projectCell(cell[0],cell[1],430,932,tallCamera);
+});
+assert.ok(Math.min.apply(null,tallCorners.map(function(point){return point.x;}))>=40 &&
+  Math.max.apply(null,tallCorners.map(function(point){return point.x;}))<=390,
+  "tall-phone board corners must leave enough room for edge models");
+tallGame.exit();
+
 touch(uiGame, matchCellPoint(7,5));
 touch(uiGame, matchCellPoint(6,5));
 assert.equal(uiGame._debugGame.snapshot().phase, "fire");

@@ -497,6 +497,10 @@ function create(options){
         drawRing(target.r,target.c,viewProjection,[.18,.65,1,.70]);
       });
       drawBeam(scene.path,scene.beamProgress,viewProjection);
+      // WeChat composes this offscreen WebGL canvas into the main 2D canvas
+      // immediately after render(). Wait for the complete frame so slower
+      // mobile GPUs cannot expose a board-only or partially drawn piece frame.
+      if(typeof gl.finish === "function") gl.finish();
       return true;
     } catch(e){ return fallback(e); }
   }

@@ -193,7 +193,7 @@ function fakeGl(options){
   var bufferNumber = 0, shaderNumber = 0;
   var calls = {bufferData:0, drawElements:0, attrib:0, matrix:0, modelMatrices:[],
     deletedBuffers:0, deletedPrograms:0, deletedShaders:0, depthMasks:[],
-    shaderSources:[], colors:[]};
+    shaderSources:[], colors:[], finishes:0};
   var gl = {
     _calls:calls,
     VERTEX_SHADER:35633, FRAGMENT_SHADER:35632, COMPILE_STATUS:35713, LINK_STATUS:35714,
@@ -216,7 +216,7 @@ function fakeGl(options){
       if(location && location.name === "uModel") calls.modelMatrices.push(Array.prototype.slice.call(value));
     },
     uniform4fv:function(_,value){ calls.colors.push(Array.prototype.slice.call(value)); }, depthMask:function(value){ calls.depthMasks.push(value); },
-    drawElements:function(){ calls.drawElements++; }
+    drawElements:function(){ calls.drawElements++; }, finish:function(){ calls.finishes++; }
   };
   return gl;
 }
@@ -280,6 +280,8 @@ var renderScene = {
   camera:{yaw:0,pitch:0.95}, selected:-1, targets:[], path:null, aiPose:null
 };
 assert.equal(observedRenderer.render(renderScene), true, "a ready renderer must draw the board scene");
+assert.ok(observedGl._calls.finishes > 0,
+  "offscreen WebGL must finish the complete frame before WeChat composites it into 2D");
 assert.ok(observedGl._calls.drawElements > 0, "render must issue indexed draws");
 assert.ok(observedGl._calls.attrib > 0, "render must bind position and normal vertex attributes");
 assert.ok(observedGl._calls.matrix > 0, "render must upload camera and model matrices");
