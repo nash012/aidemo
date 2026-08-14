@@ -1,7 +1,7 @@
 {
     "appid": "wx854f718874242510",
-    "projectname": "游戏合集",
-    "description": "三款小游戏合集：跳一跳、激光镭射象棋、萌宠合成",
+    "projectname": "来桌游",
+    "description": "来桌游：激光反射策略对战",
     "setting": {
         "es6": true,
         "minified": true,

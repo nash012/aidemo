@@ -820,7 +820,7 @@ try {
 
   // App starts directly on the laser setup screen (no menu)
   suiteFrame(16);
-  assert.ok(suiteCtx._texts.indexOf("激光镭射象棋") >= 0,
+  assert.ok(suiteCtx._texts.indexOf("来桌游") >= 0,
     "suite must start directly on laser setup screen");
   assert.ok(suiteCtx._texts.indexOf("选择阵型") >= 0,
     "suite setup must show formation selector");

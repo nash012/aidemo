@@ -2242,7 +2242,7 @@ module.exports = {
       ctx.fillStyle = "#a9c6d3"; ctx.font = "600 9px 'Arial Narrow', sans-serif";
       ctx.fillText("OPTICAL ARRAY / PRE-MATCH CALIBRATION", 16, SAFE_TOP + 8);
       ctx.fillStyle = "#f2eee5"; ctx.font = "800 24px 'PingFang SC', sans-serif";
-      ctx.fillText("激光镭射象棋", 16, SAFE_TOP + 36);
+      ctx.fillText("来桌游", 16, SAFE_TOP + 36);
       ctx.fillStyle = "#8998a1"; ctx.font = "11px 'PingFang SC', sans-serif";
       ctx.fillText("校准阵型与对手强度", 16, SAFE_TOP + 54);
 

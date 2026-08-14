@@ -88,7 +88,7 @@ module.exports = {
         ctx.textBaseline = "middle";
         ctx.fillStyle = "#fff";
         ctx.font = "700 26px sans-serif";
-        ctx.fillText("\u{1F3AE} 游戏合集", W / 2, H * 0.11);
+        ctx.fillText("\u{1F3AE} 来桌游", W / 2, H * 0.11);
 
         ctx.fillStyle = "rgba(255,255,255,0.45)";
         ctx.font = "13px sans-serif";
