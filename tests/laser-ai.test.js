@@ -355,15 +355,15 @@ var safePressure = [
 
 assert.deepEqual(game._debugAI.config("easy"), {
   attack:0.65, defense:1.25, guard:1.7,
-  reply:0, candidates:24, variety:5
+  reply:0, candidates:24, variety:5, depth:1
 });
 assert.deepEqual(game._debugAI.config("normal"), {
   attack:2.0, defense:0.9, guard:0.8,
-  reply:0.55, candidates:40, variety:1.5
+  reply:0.55, candidates:40, variety:1.5, depth:2
 });
 assert.deepEqual(game._debugAI.config("hard"), {
   attack:1.2, defense:1.2, guard:1.5,
-  reply:1.0, candidates:40, variety:0.5
+  reply:1.0, candidates:40, variety:0.5, depth:3
 });
 var easyConfig = game._debugAI.config("easy");
 easyConfig.attack = 99;
