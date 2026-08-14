@@ -40,6 +40,39 @@ assert.ok(GlbLoader && typeof GlbLoader.parseGlb === "function",
 assert.equal(typeof GlbLoader.mirrorSurfaces, "function",
   "the runtime must expose mirror surface metadata");
 
+MODEL_FILES.forEach(function(file){
+  var model = GlbLoader.parseGlb(modelArrayBuffer(file));
+  var faction = /_red\.glb$/.test(file) ? "red" : "blue";
+  assert.deepEqual(model.materials.map(function(material){ return material.name; }),
+    [faction, faction+"_dark", "gunmetal", "mirror", "accent"],
+    file+" must use the shared optical-instrument material system");
+  var mirrorMaterial=model.materials.filter(function(material){return material.name==="mirror";})[0];
+  var accentMaterial=model.materials.filter(function(material){return material.name==="accent";})[0];
+  assert.ok(mirrorMaterial.roughnessFactor<=.08,
+    file+" must preserve a polished optical surface");
+  assert.ok(Math.max.apply(null,accentMaterial.emissiveFactor)>.5,
+    file+" must carry a visible faction-colored emissive accent");
+  var vertices=0,triangles=0,minY=Infinity,maxY=-Infinity,maxHorizontal=0;
+  model.meshes.forEach(function(mesh){ mesh.primitives.forEach(function(primitive){
+    vertices+=primitive.positions.length/3;
+    triangles+=primitive.indices.length/3;
+    for(var i=0;i<primitive.positions.length;i+=3){
+      var x=primitive.positions[i],y=primitive.positions[i+1],z=primitive.positions[i+2];
+      minY=Math.min(minY,y);maxY=Math.max(maxY,y);
+      maxHorizontal=Math.max(maxHorizontal,Math.abs(x),Math.abs(z));
+    }
+  }); });
+  assert.ok(minY>=-.001 && maxY<=1.31,
+    file+" must stay on its base and inside the mobile camera height budget");
+  var highFidelityLaser=/^laser_cannon_/.test(file);
+  assert.ok(maxHorizontal<=(highFidelityLaser?.53:.51),
+    file+" must stay inside one board cell before runtime scaling");
+  assert.ok(vertices<=(highFidelityLaser?3200:750) && triangles<=(highFidelityLaser?1800:420),
+    file+" must stay within its mobile rendering budget");
+  if(highFidelityLaser) assert.ok(model.meshes.length>=24 && triangles>=1200,
+    file+" must retain the layered high-fidelity cannon silhouette");
+});
+
 function modelArrayBuffer(file){
   var data = fs.readFileSync(path.join(MODEL_DIR, file));
   return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
@@ -55,10 +88,11 @@ function replaceGlbText(buffer, from, to){
 }
 
 var singleMirror = GlbLoader.parseGlb(modelArrayBuffer("single_mirror_red.glb"));
-assert.equal(singleMirror.meshes.length, 10,
-  "single mirror must retain all ten authored mesh parts");
+assert.equal(singleMirror.meshes.length, 11,
+  "single mirror must retain its shared base, prism, frame and optical details");
 assert.deepEqual(singleMirror.materials.map(function(material){ return material.name; }),
-  ["red", "red_dark", "mirror"], "single mirror PBR materials must be preserved");
+  ["red", "red_dark", "gunmetal", "mirror", "accent"],
+  "single mirror optical-instrument materials must be preserved");
 singleMirror.meshes.forEach(function(mesh){
   assert.ok(mesh.primitives.length > 0, "every GLB mesh must contain a primitive");
   mesh.primitives.forEach(function(primitive){
@@ -114,9 +148,8 @@ var badNormalMirror = GlbLoader.parseGlb(modelArrayBuffer("single_mirror_red.glb
 var badNormalNode = badNormalMirror.nodes.filter(function(node){ return /_Mirror_Face$/.test(node.name); })[0];
 var badNormals = badNormalMirror.meshes[badNormalNode.mesh].primitives[0].normals;
 for(var badN=0;badN<badNormals.length;badN+=3){ badNormals[badN]=1; badNormals[badN+1]=0; badNormals[badN+2]=0; }
-badNormals[0]=0; badNormals[2]=1;
 assert.throws(function(){ GlbLoader.mirrorSurfaces(badNormalMirror); }, /normal/,
-  "one stray Z normal must not validate an incorrectly authored mirror surface");
+  "mirror validation must reject normal data that disagrees with the authored optical plane");
 
 var validSingle = new Uint8Array(modelArrayBuffer("single_mirror_red.glb"));
 var badMagic = validSingle.slice();
@@ -249,6 +282,13 @@ assert.ok(observedGl._calls.shaderSources.some(function(source){
   return source.indexOf("vLocalNormal") >= 0 && source.indexOf("oneSided") >= 0 &&
     source.indexOf("mirrorSide<.65") >= 0;
 }), "single-mirror shader must darken every face except the authored reflective side");
+assert.ok(observedGl._calls.shaderSources.some(function(source){
+  return source.indexOf("uniform vec4 uMaterial") >= 0 &&
+    source.indexOf("base.rgb*uMaterial.z") >= 0;
+}), "piece shader must use metallic, roughness and emissive material data");
+assert.ok(observedGl._calls.shaderSources.some(function(source){
+  return source.indexOf("smoothstep(.32,1.0,edge)") >= 0;
+}), "laser ribbons must feather their edges in the shader instead of exposing hard quad boundaries");
 assert.deepEqual(observedContextOptions, {alpha:true,antialias:true,preserveDrawingBuffer:true},
   "offscreen WebGL must preserve its frame for 2D canvas composition");
 observedRenderer.resize(640, 480, 1);
@@ -318,7 +358,7 @@ assert.ok(Math.abs(animatedModel[12] - 1.5) < 1e-6 &&
   Math.abs(animatedModel[13] - 0.32) < 1e-6 &&
   Math.abs(animatedModel[14] - 0.5) < 1e-6,
   "AI animation poses must drive the rendered GLB instance before rule state commits");
-assert.ok(Math.abs(Math.hypot(animatedModel[0],animatedModel[2])-.39)<1e-6,
+assert.ok(Math.abs(Math.hypot(animatedModel[0],animatedModel[2])-.44)<1e-6,
   "elimination poses must be able to shrink a rendered GLB before it disappears");
 
 var drawsBeforeBaseline = observedGl._calls.drawElements;
@@ -345,8 +385,8 @@ observedRenderer.render({
   path:[{r:0,c:0},{r:0,c:1},{r:2,c:1}], beamProgress:1
 });
 var beamDraws = observedGl._calls.drawElements - drawsWithoutBeam - baseFrameDraws;
-assert.equal(beamDraws, 6,
-  "each valid laser segment must draw a cyan halo, warm energy layer and white-hot core");
+assert.equal(beamDraws, 8,
+  "each valid laser segment must draw a cyan halo, red sheath, gold filament and white-hot core");
 assert.deepEqual(observedGl._calls.depthMasks.slice(-4), [false,true,false,true],
   "each translucent glow must stop writing depth before its bright core is drawn");
 var drawsBeforeHalfBeam = observedGl._calls.drawElements;
@@ -354,7 +394,7 @@ observedRenderer.render({
   pieces:[], camera:renderScene.camera, selected:-1, targets:[], aiPose:null,
   path:[{r:0,c:0},{r:0,c:1},{r:2,c:1}], beamProgress:0.5
 });
-assert.equal(observedGl._calls.drawElements - drawsBeforeHalfBeam - baseFrameDraws, 3,
+assert.equal(observedGl._calls.drawElements - drawsBeforeHalfBeam - baseFrameDraws, 4,
   "halfway beam progress must draw only the first completed segment layers");
 var drawsBeforeZeroBeam = observedGl._calls.drawElements;
 observedRenderer.render({

@@ -72,6 +72,10 @@ module.exports = {
     var DEFAULT_YAW = 0;
     var DEFAULT_PITCH = 0.95;
     var SETUP_PITCH = 1.08;
+    var MIN_MATCH_PITCH = 0.50;
+    var MAX_MATCH_PITCH = 1.50;
+    var MIN_MATCH_ZOOM = 0.72;
+    var MAX_MATCH_ZOOM = 1.48;
     var cam = {
       yaw: DEFAULT_YAW,
       pitch: DEFAULT_PITCH,
@@ -280,12 +284,22 @@ module.exports = {
       updateMatchCameraFit();
     }
 
+    function constrainMatchCamera(){
+      cam.zoom=Math.max(MIN_MATCH_ZOOM,Math.min(MAX_MATCH_ZOOM,cam.zoom||1));
+      // A zoomed-out board needs a steeper minimum pitch; otherwise its plane
+      // collapses into a thin strip and distant rows become visually hidden.
+      var minimumPitch=MIN_MATCH_PITCH+Math.max(0,1-cam.zoom)*.30;
+      cam.pitch=Math.max(minimumPitch,Math.min(MAX_MATCH_PITCH,cam.pitch));
+      cam.yaw=Math.max(-1.6,Math.min(1.6,cam.yaw));
+    }
+
     function updateMatchCameraFit(){
+      constrainMatchCamera();
       var cos=Math.abs(Math.cos(cam.yaw)), sin=Math.abs(Math.sin(cam.yaw));
       var halfWidth=cos*5.65+sin*4.65;
       var base=Math.min(SW*.72,(boardAreaBot-boardAreaTop)*1.18)*cam.dist/10;
       cam.cx=SW/2; cam.cy=(boardAreaTop+boardAreaBot)/2;
-      cam.focal=base*Math.min(1,5.65/halfWidth)*Math.max(.72,Math.min(1.48,cam.zoom||1));
+      cam.focal=base*Math.min(1,5.65/halfWidth)*cam.zoom;
     }
 
     function enterSetup(){
@@ -1471,21 +1485,21 @@ module.exports = {
       }
       ctx.save();
       ctx.lineCap = "round"; ctx.lineJoin = "round";
-      var pulse = 0.88 + Math.sin(G.beamPulseT * 14) * 0.12;
-      var glowW = Math.max(4, Math.min(6, 5 * pulse));
-      var energyW = Math.max(2, Math.min(3, glowW * 0.55));
-      ctx.globalAlpha = 0.12 * pulse;
-      ctx.shadowColor = "rgba(101,217,255,0.75)"; ctx.shadowBlur = 14;
-      ctx.strokeStyle = "#65d9ff"; ctx.lineWidth = glowW * 1.9;
+      var pulse = 0.94 + Math.sin(G.beamPulseT * 14) * 0.06;
+      var glowW = Math.max(4, Math.min(5, 4.5 * pulse));
+      var energyW = Math.max(2, Math.min(2.7, glowW * 0.54));
+      ctx.globalAlpha = 0.10 * pulse;
+      ctx.shadowColor = "rgba(101,217,255,0.72)"; ctx.shadowBlur = 12;
+      ctx.strokeStyle = "#65d9ff"; ctx.lineWidth = glowW * 2.1;
       beamPath3D(pts, upto); ctx.stroke();
-      ctx.globalAlpha = 0.22 * pulse;
-      ctx.shadowColor = "rgba(255,90,54,0.85)"; ctx.shadowBlur = 9;
-      ctx.strokeStyle = "#ff5a36"; ctx.lineWidth = glowW;
+      ctx.globalAlpha = 0.34 * pulse;
+      ctx.shadowColor = "rgba(255,72,39,0.78)"; ctx.shadowBlur = 6;
+      ctx.strokeStyle = "#ff4727"; ctx.lineWidth = glowW;
       beamPath3D(pts, upto); ctx.stroke();
-      ctx.globalAlpha = 0.95 * pulse;
-      ctx.shadowBlur = 0; ctx.strokeStyle = "#ffd34e"; ctx.lineWidth = energyW;
+      ctx.globalAlpha = 0.94 * pulse;
+      ctx.shadowBlur = 0; ctx.strokeStyle = "#ffb51f"; ctx.lineWidth = energyW;
       beamPath3D(pts, upto); ctx.stroke();
-      ctx.globalAlpha = 1; ctx.strokeStyle = "#fffdf2"; ctx.lineWidth = Math.max(1, Math.min(1.5, energyW * 0.5));
+      ctx.globalAlpha = 1; ctx.strokeStyle = "#fffff1"; ctx.lineWidth = Math.max(1, Math.min(1.35, energyW * 0.46));
       beamPath3D(pts, upto); ctx.stroke();
       var head = beamHead3D(pts, upto);
       if(head){
@@ -1501,14 +1515,15 @@ module.exports = {
       return {x:a.x + (b.x-a.x)*frac, y:a.y + (b.y-a.y)*frac};
     }
     function drawBeamHead3D(head,energyW,pulse){
-      var radius=Math.max(4,energyW*2.25)*pulse;
-      var glow=ctx.createRadialGradient(head.x,head.y,0,head.x,head.y,radius*2.4);
+      var radius=Math.max(2.8,energyW*1.55)*pulse;
+      var glow=ctx.createRadialGradient(head.x,head.y,0,head.x,head.y,radius*3);
       glow.addColorStop(0,"rgba(255,253,242,1)");
-      glow.addColorStop(.28,"rgba(255,211,78,.95)");
-      glow.addColorStop(.62,"rgba(255,90,54,.42)");
+      glow.addColorStop(.18,"rgba(255,211,78,.98)");
+      glow.addColorStop(.48,"rgba(255,71,39,.48)");
       glow.addColorStop(1,"rgba(101,217,255,0)");
       ctx.globalAlpha=1;ctx.fillStyle=glow;
-      ctx.beginPath();ctx.arc(head.x,head.y,radius*2.4,0,6.283);ctx.fill();
+      ctx.beginPath();ctx.arc(head.x,head.y,radius*3,0,6.283);ctx.fill();
+      ctx.fillStyle="#fffff1";ctx.beginPath();ctx.arc(head.x,head.y,Math.max(1,radius*.28),0,6.283);ctx.fill();
     }
     function drawBeamAccents3D(){
       if(!G.path || G.path.length<2) return;
@@ -1547,16 +1562,16 @@ module.exports = {
         if(index < 0 || upto < index) continue;
         var p = pts[index], alpha = Math.max(0, 1 - (upto - index) * 2) * pulse;
         if(alpha <= 0) continue;
-        ctx.globalAlpha = alpha * 0.7;
-        ctx.strokeStyle = "#ffd34e"; ctx.lineWidth = 1.2; ctx.shadowBlur = 0;
-        var diamond=energyW*(1.45+life);
-        ctx.beginPath();ctx.moveTo(p.x,p.y-diamond);ctx.lineTo(p.x+diamond,p.y);
-        ctx.lineTo(p.x,p.y+diamond);ctx.lineTo(p.x-diamond,p.y);ctx.closePath();ctx.stroke();
-        for(var s=0;s<4;s++){
-          var angle = s * Math.PI / 2 + G.beamPulseT * 9;
-          ctx.beginPath(); ctx.moveTo(p.x + Math.cos(angle) * energyW, p.y + Math.sin(angle) * energyW);
-          ctx.lineTo(p.x + Math.cos(angle) * energyW * 2.2, p.y + Math.sin(angle) * energyW * 2.2); ctx.stroke();
-        }
+        var radius=energyW*(2.2+life*.35);
+        var glow=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,radius);
+        glow.addColorStop(0,"rgba(255,255,241,"+(alpha*.96)+")");
+        glow.addColorStop(.22,"rgba(255,181,31,"+(alpha*.78)+")");
+        glow.addColorStop(.58,"rgba(255,71,39,"+(alpha*.32)+")");
+        glow.addColorStop(1,"rgba(101,217,255,0)");
+        ctx.globalAlpha=1;ctx.fillStyle=glow;ctx.shadowBlur=0;
+        ctx.beginPath();ctx.arc(p.x,p.y,radius,0,6.283);ctx.fill();
+        ctx.globalAlpha=alpha*.72;ctx.strokeStyle="#fff3b0";ctx.lineWidth=.8;
+        ctx.beginPath();ctx.arc(p.x,p.y,energyW*(.72+life*.16),0,6.283);ctx.stroke();
       }
     }
     function beamPath3D(pts, upto){
@@ -2460,9 +2475,31 @@ module.exports = {
         commitAiAction(anim.action);
       }
       G.aiAnim = null;
+      finishAiActionTurn();
+    }
+
+    function aiCanEliminateOpponent(){
+      try {
+        var laser = getLaser(G.pieces, G.aiPlayer);
+        if(!laser) return false;
+        var simulation = simulateLaser(G.pieces, laser);
+        return !!(simulation.eliminated && simulation.eliminated.owner !== G.aiPlayer);
+      } catch(e) {
+        return false;
+      }
+    }
+
+    function finishAiActionTurn(){
       G.phase = "fire";
-      try { render(); } catch(e) {}
-      fireLaser();
+      if(aiCanEliminateOpponent()){
+        try { render(); } catch(e) {}
+        fireLaser();
+        return;
+      }
+      G.path = null;
+      G.eliminated = null;
+      G.undoSnapshot = null;
+      endTurn();
     }
 
     function updateAiAnimation(dt){
@@ -2508,12 +2545,12 @@ module.exports = {
           boardCellName(G.aiAnim.toRow, G.aiAnim.toCol);
         else if(act.kind === "rot" || act.kind === "laserRot") G.actionNotice = "电脑旋转棋子";
         else if(act.kind === "swap") G.actionNotice = "电脑互换棋子";
-        else G.actionNotice = "电脑选择直接发射";
+        else G.actionNotice = "电脑结束回合";
         render();
       } catch(e) {
         commitAiAction(act);
-        G.aiAnim = null; G.phase = "fire";
-        fireLaser();
+        G.aiAnim = null;
+        finishAiActionTurn();
       }
     }
 
@@ -2773,7 +2810,6 @@ module.exports = {
           var midY = (t1.clientY+t2.clientY)/2;
           // 双指捏合直接调整棋盘缩放，不再用俯仰角伪装缩放。
           if(camGesture.lastDist>1) cam.zoom*=dist/camGesture.lastDist;
-          cam.zoom=Math.max(.72,Math.min(1.48,cam.zoom));
           // 双指上下平移 → pitch
           cam.pitch -= (midY - camGesture.lastMidY) * 0.004;
           // 双指左右旋转 → yaw（用两指连线角度变化）
@@ -2786,8 +2822,7 @@ module.exports = {
             cam.yaw += dA * 1.2;
           }
           camGesture.lastAngle = angle;
-          cam.pitch = Math.max(0.2, Math.min(1.5, cam.pitch));
-          cam.yaw = Math.max(-1.6, Math.min(1.6, cam.yaw));
+          constrainMatchCamera();
           camGesture.lastDist = dist;
           camGesture.lastMidY = midY;
           render();
@@ -2805,8 +2840,7 @@ module.exports = {
           var ddy = ts[0].clientY - lastDrag.y;
           cam.yaw += ddx * 0.006;
           cam.pitch -= ddy * 0.005;
-          cam.pitch = Math.max(0.2, Math.min(1.5, cam.pitch));
-          cam.yaw = Math.max(-1.6, Math.min(1.6, cam.yaw));
+          constrainMatchCamera();
           lastDrag.x = ts[0].clientX;
           lastDrag.y = ts[0].clientY;
           render();
@@ -2861,8 +2895,7 @@ module.exports = {
       if(G.screen !== "playing" || G.modal === "rules") return;
       cam.yaw += dx * 0.006;
       cam.pitch -= dy * 0.005;
-      cam.pitch = Math.max(0.2, Math.min(1.5, cam.pitch));
-      cam.yaw = Math.max(-1.6, Math.min(1.6, cam.yaw));
+      constrainMatchCamera();
     }
 
     function processClick(x, y){
@@ -3000,7 +3033,7 @@ module.exports = {
         hitPiece: function(x,y,owner){var p=hitPiece3D(x,y,owner);return p?G.pieces.indexOf(p):-1;},
         moveTargets: function(index){return G.pieces[index]?moveTargets(G.pieces[index]).map(copySnapshotValue):[];},
         showResult: function(kind,winner){G.over=true;G.winner=winner;G.phase="over";startResultModal(kind);},
-        beginAiAction: applyAiAction,
+        beginAiAction: function(action){ G.current=G.aiPlayer; applyAiAction(action); },
         beginElimination: function(index){
           if(index>=0 && index<G.pieces.length){G.eliminated=G.pieces[index];startEliminationAnimation(G.eliminated);}
         },

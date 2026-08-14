@@ -89,8 +89,14 @@ function testAiAnimation(action, beforeSeconds, advanceSeconds, expected){
   var snap = animGame._debugGame.snapshot();
   expected(snap, animCtx);
   assert.equal(snap.aiAnim, null);
-  assert.equal(snap.busy, true,
-    action.kind + " must keep input blocked while the laser runs");
+  assert.equal(snap.busy, false,
+    action.kind + " must release input when no opponent can be eliminated");
+  assert.equal(snap.phase, "select",
+    action.kind + " must end the computer turn without an unnecessary beam");
+  assert.equal(snap.current, 0,
+    action.kind + " must return control to the human player");
+  assert.equal(animGame._debugEffects.snapshot().timeoutCount, 0,
+    action.kind + " must not schedule beam timers when it cannot eliminate an opponent");
   animGame.update(0.20);
   assert.deepEqual(animGame._debugGame.snapshot().pieces, snap.pieces,
     action.kind + " must commit exactly once");
@@ -147,12 +153,15 @@ assert.deepEqual(game._debugEffects.beamTurns([
 var beamCtx = fakeContext();
 var beamGame = LaserGame.create(beamCtx, 375, 667, function(){});
 beamGame._debugGame.beginMatch();
-beamGame._debugEffects.setPieces([piece("rl", "laser", 0, 0, 0, 1)]);
+beamGame._debugEffects.setPieces([
+  piece("bl", "laser", 1, 0, 0, 1),
+  piece("rk", "king", 0, 0, 3, 0)
+]);
 beamCtx._strokes.length = 0;
 beamGame._debugEffects.beginAiAction({kind:"skip"});
 beamGame.update(0.90);
 var glowWidths = beamCtx._strokes.filter(function(stroke){
-  return stroke.strokeStyle === "#ff5a36";
+  return stroke.strokeStyle === "#ff4727";
 }).map(function(stroke){ return stroke.lineWidth; });
 assert.ok(glowWidths.length > 0, "beam render must draw a warm corona");
 assert.ok(glowWidths.every(function(width){ return width >= 4 && width <= 6; }),
@@ -287,6 +296,31 @@ assert.ok(cameraGame._debugGame.snapshot().camera.zoom>matchCamera.zoom,
 assert.ok(cameraGame._debugGame.snapshot().webglCamera.distance<pinchDistanceBefore,
   "pinch zoom must move the WebGL camera closer to the board");
 cameraGame.exit();
+
+var cameraGuardGame=LaserGame.create(fakeContext(),375,667,function(){});
+cameraGuardGame._debugGame.beginMatch();
+cameraGuardGame.onTouchStart({touches:[
+  {clientX:80,clientY:100},{clientX:220,clientY:100}
+]});
+cameraGuardGame.onTouchMove({touches:[
+  {clientX:130,clientY:100},{clientX:170,clientY:100}
+]});
+cameraGuardGame.onTouchEnd({touches:[],changedTouches:[
+  {clientX:130,clientY:100},{clientX:170,clientY:100}
+]});
+cameraGuardGame.cameraControl(300,1000);
+var guardedCamera=cameraGuardGame._debugGame.snapshot();
+assert.equal(guardedCamera.camera.zoom,.72,
+  "pinching inward must retain the supported minimum board scale");
+assert.ok(guardedCamera.camera.pitch>=.58,
+  "a zoomed-out board must keep enough pitch to prevent its rows collapsing into one strip");
+var guardedCorners=[[0,0],[0,9],[7,0],[7,9]].map(function(cell){
+  return WebGLRenderer.projectCell(cell[0],cell[1],375,667,guardedCamera.webglCamera);
+});
+var guardedY=guardedCorners.map(function(point){return point.y;});
+assert.ok(Math.max.apply(null,guardedY)-Math.min.apply(null,guardedY)>80,
+  "the most oblique supported zoomed-out camera must keep the board visibly two-dimensional");
+cameraGuardGame.exit();
 
 var controlCtx=fakeContext(),controlGame=LaserGame.create(controlCtx,375,667,function(){});
 controlGame._debugGame.beginMatch();
@@ -707,12 +741,12 @@ try {
   assert.equal(blockedGame._debugGame.snapshot().sel, -1,
     "player touch must not select a piece during AI motion");
   blockedGame.update(0.75);
-  var beamState = blockedGame._debugGame.snapshot();
-  touch(blockedGame, matchCellPoint(7, 5));
-  assert.deepEqual(blockedGame._debugGame.snapshot().pieces, beamState.pieces,
-    "player touch must not change pieces during beam travel");
-  assert.equal(blockedGame._debugGame.snapshot().phase, "anim");
-  assert.equal(blockedGame._debugGame.snapshot().sel, -1);
+  var completedAiTurn = blockedGame._debugGame.snapshot();
+  assert.equal(completedAiTurn.phase, "select",
+    "an AI move with no opponent target must end without beam travel");
+  assert.equal(completedAiTurn.current, 0);
+  assert.equal(completedAiTurn.busy, false);
+  assert.equal(blockedGame._debugEffects.snapshot().timeoutCount, 0);
   blockedGame.exit();
 
   var animatedSwap = [
@@ -744,6 +778,8 @@ try {
   assert.equal(swapped.pieces[1].row, 4);
   assert.equal(swapped.pieces[1].col, 4);
   assert.equal(swapped.aiAnim, null);
+  assert.equal(swapped.phase, "select");
+  assert.equal(swapped.busy, false);
   assert.ok(swapCtx._texts.indexOf("电脑互换棋子") >= 0);
   swapGame.update(0.20);
   assert.deepEqual(swapGame._debugEffects.snapshot().pieces, swapped.pieces,
@@ -752,8 +788,8 @@ try {
 
   testAiAnimation({kind:"skip"}, 0.51, 0.53, function(snap, ctx){
     assert.deepEqual(snap.pieces, game._debugAI.initialPieces(0));
-    assert.equal(snap.actionNotice, "电脑选择直接发射");
-    assert.ok(ctx._texts.indexOf("电脑选择直接发射") >= 0);
+    assert.equal(snap.actionNotice, "电脑结束回合");
+    assert.ok(ctx._texts.indexOf("电脑结束回合") >= 0);
   });
 
   var invalidGame = LaserGame.create(fakeContext(), 375, 667, function(){});
@@ -761,9 +797,10 @@ try {
   invalidGame._debugEffects.beginAiAction({pi:999, kind:"move", r:3, c:3});
   var recovered = invalidGame._debugGame.snapshot();
   assert.equal(recovered.aiAnim, null);
-  assert.equal(recovered.phase, "anim",
-    "an animation creation failure must continue immediately to laser fire");
-  assert.equal(recovered.busy, true);
+  assert.equal(recovered.phase, "select",
+    "an invalid AI action with no target must recover by ending the turn");
+  assert.equal(recovered.busy, false);
+  assert.equal(recovered.current, 0);
   invalidGame.exit();
 
   var exitGame = LaserGame.create(fakeContext(), 375, 667, function(){});

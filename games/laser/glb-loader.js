@@ -102,6 +102,7 @@ function parseGlb(input){
       baseColorFactor:(pbr.baseColorFactor || [1,1,1,1]).slice(),
       metallicFactor:pbr.metallicFactor === undefined ? 1 : pbr.metallicFactor,
       roughnessFactor:pbr.roughnessFactor === undefined ? 1 : pbr.roughnessFactor,
+      emissiveFactor:(source.emissiveFactor || [0,0,0]).slice(),
       doubleSided:source.doubleSided === true
     };
   });

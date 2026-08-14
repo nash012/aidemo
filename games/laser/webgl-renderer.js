@@ -7,7 +7,7 @@ var MODEL_PREFIX = {
   mirror:"single_mirror", switch:"double_mirror"
 };
 var PIECE_SCALE = {
-  laser:.72, king:.78, shield:.78, mirror:.78, switch:.78
+  laser:.92, king:.88, shield:.88, mirror:.88, switch:.88
 };
 var RED = [[6,9],[5,9],[4,9],[3,9],[2,9],[1,9],[0,9],[7,1],[0,1]];
 var WHITE = [[7,0],[6,0],[5,0],[4,0],[3,0],[2,0],[1,0],[7,8],[0,8]];
@@ -215,7 +215,7 @@ function create(options){
         "varying vec3 vNormal; varying vec3 vLocalNormal; void main(){vLocalNormal=aNormal;" +
         "vNormal=mat3(uModel)*aNormal;gl_Position=uMvp*vec4(aPosition,1.0);}");
       fragment = compile(gl.FRAGMENT_SHADER,
-        "precision mediump float; varying vec3 vNormal; varying vec3 vLocalNormal; uniform vec4 uColor; uniform vec4 uStyle;" +
+        "precision mediump float; varying vec3 vNormal; varying vec3 vLocalNormal; uniform vec4 uColor; uniform vec4 uStyle; uniform vec4 uMaterial;" +
         "void main(){vec4 base=uColor;bool oneSided=base.a>1.5;" +
         "float mirrorSide=dot(normalize(vLocalNormal),normalize(vec3(1.0,0.0,1.0)));" +
         "if(oneSided&&mirrorSide<.65)base=vec4(.025,.030,.042,1.0);else base.a=min(base.a,1.0);" +
@@ -223,12 +223,20 @@ function create(options){
         "if(uStyle.x<.5){float matte=.84+.16*key;gl_FragColor=vec4(base.rgb*matte,base.a);}" +
         "else if(uStyle.x<1.5){float grey=dot(base.rgb,vec3(.299,.587,.114));" +
         "vec3 vivid=clamp(mix(vec3(grey),base.rgb,1.22),0.0,1.0);" +
-        "float bands=.58+.18*step(.18,key)+.24*step(.62,key);" +
+        "float bands=.68+.14*step(.18,key)+.18*step(.62,key);" +
         "float rim=pow(1.0-max(dot(n,normalize(uStyle.yzw)),0.0),2.0);" +
-        "vec3 lit=mix(vivid*bands,vec3(.012,.022,.040),rim*.64);" +
+        "vec3 lit=mix(vivid*bands,vec3(.020,.036,.065),rim*.42);" +
+        "float rough=clamp(uMaterial.y,.05,1.0);" +
+        "vec3 halfDir=normalize(vec3(-.22,.92,.31)+normalize(uStyle.yzw)*.18);" +
+        "float spec=pow(max(dot(n,halfDir),0.0),mix(54.0,8.0,rough));" +
+        "float fresnel=pow(1.0-max(dot(n,normalize(uStyle.yzw)),0.0),3.0);" +
+        "lit+=vec3(.78,.90,1.0)*spec*(.16+.72*uMaterial.x);" +
+        "lit+=vivid*fresnel*uMaterial.x*.14+base.rgb*uMaterial.z;" +
         "lit+=vec3(.07,.085,.10)*pow(max(n.y,0.0),10.0);" +
         "gl_FragColor=vec4(clamp(lit,0.0,1.0),base.a);}" +
-        "else{gl_FragColor=base;}}");
+        "else if(uStyle.x<2.5){gl_FragColor=base;}" +
+        "else{float edge=abs(vLocalNormal.x);float feather=1.0-smoothstep(.32,1.0,edge);" +
+        "gl_FragColor=vec4(base.rgb,base.a*feather);}}");
       program = gl.createProgram();
       if(!program) throw new Error("program allocation failed");
       gl.attachShader(program, vertex); gl.attachShader(program, fragment); gl.linkProgram(program);
@@ -241,10 +249,11 @@ function create(options){
         mvp:gl.getUniformLocation(program,"uMvp"),
         model:gl.getUniformLocation(program,"uModel"),
         color:gl.getUniformLocation(program,"uColor"),
-        style:gl.getUniformLocation(program,"uStyle")
+        style:gl.getUniformLocation(program,"uStyle"),
+        material:gl.getUniformLocation(program,"uMaterial")
       };
       if(locations.position < 0 || locations.normal < 0 || !locations.mvp ||
-         !locations.model || !locations.color || !locations.style)
+         !locations.model || !locations.color || !locations.style || !locations.material)
         throw new Error("required shader locations unavailable");
       gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -317,7 +326,11 @@ function create(options){
   function createBeam(){
     return withBuffers("beam buffer allocation failed",function(item){
     gl.bindBuffer(gl.ARRAY_BUFFER,item.normal);
-    gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([0,1,0,0,1,0,0,1,0,0,1,0]),gl.STATIC_DRAW);
+    // The signed X component is interpolated across the ribbon and used by
+    // the beam shader as a soft, anti-aliased edge coordinate.
+    gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([
+      -1,0,0, 1,0,0, 1,0,0, -1,0,0
+    ]),gl.STATIC_DRAW);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,item.index);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array([0,1,2,0,2,3]),gl.STATIC_DRAW);
     });
@@ -468,30 +481,42 @@ function create(options){
     return true;
   }
 
-  function drawBeamSegment(a,b,width,viewProjection,color){
+  function drawBeamSegment(a,b,width,camera,color){
     var aw=cellToWorld(a.r,a.c), bw=cellToWorld(b.r,b.c);
     var dx=bw.x-aw.x,dz=bw.z-aw.z,length=Math.hypot(dx,dz);
     if(!length) return;
-    var px=-dz/length*width,pz=dx/length*width,y=.34;
+    // Build a camera-facing ribbon instead of a board-flat rectangle. It
+    // keeps the apparent beam thickness smooth at every board rotation.
+    var y=.34,mx=(aw.x+bw.x)*.5,mz=(aw.z+bw.z)*.5;
+    var vx=camera.eye[0]-mx,vy=camera.eye[1]-y,vz=camera.eye[2]-mz;
+    var viewLength=Math.hypot(vx,vy,vz)||1;
+    vx/=viewLength;vy/=viewLength;vz/=viewLength;
+    var ndx=dx/length,ndz=dz/length;
+    var px=-ndz*vy,py=ndz*vx-ndx*vz,pz=ndx*vy;
+    var perpendicularLength=Math.hypot(px,py,pz)||1;
+    px=px/perpendicularLength*width;
+    py=py/perpendicularLength*width;
+    pz=pz/perpendicularLength*width;
     gl.bindBuffer(gl.ARRAY_BUFFER,beam.position);
     gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([
-      aw.x+px,y,aw.z+pz, aw.x-px,y,aw.z-pz,
-      bw.x-px,y,bw.z-pz, bw.x+px,y,bw.z+pz
+      aw.x-px,y-py,aw.z-pz, aw.x+px,y+py,aw.z+pz,
+      bw.x+px,y+py,bw.z+pz, bw.x-px,y-py,bw.z-pz
     ]),gl.DYNAMIC_DRAW || gl.STATIC_DRAW);
     bindAttributes(beam);
     var model=identity();
     gl.uniformMatrix4fv(locations.model,false,new Float32Array(model));
-    gl.uniformMatrix4fv(locations.mvp,false,new Float32Array(multiply(viewProjection,model)));
+    gl.uniformMatrix4fv(locations.mvp,false,new Float32Array(multiply(camera.viewProjection,model)));
     gl.uniform4fv(locations.color,new Float32Array(color));
     gl.drawElements(gl.TRIANGLES,6,gl.UNSIGNED_SHORT,0);
   }
 
-  function drawBeam(path,progress,viewProjection,pulseTime){
+  function drawBeam(path,progress,camera,pulseTime){
     if(!validPath(path)) return;
     progress = Number.isFinite(progress) ? Math.max(0,Math.min(1,progress)) : 1;
     pulseTime = Number.isFinite(pulseTime) ? pulseTime : 0;
-    var pulse = .92 + Math.sin(pulseTime * 15) * .08;
+    var pulse = .94 + Math.sin(pulseTime * 15) * .06;
     var upto = progress * (path.length - 1);
+    setStyle(3,[-camera.forward[0],-camera.forward[1],-camera.forward[2]]);
     for(var i=0;i<path.length-1 && upto>i;i++){
       var end = path[i+1], fraction = Math.min(1,upto-i);
       if(fraction < 1) end = {
@@ -499,10 +524,11 @@ function create(options){
         c:path[i].c+(end.c-path[i].c)*fraction
       };
       gl.depthMask(false);
-      drawBeamSegment(path[i],end,.15*pulse,viewProjection,[.20,.72,1,.14*pulse]);
-      drawBeamSegment(path[i],end,.075*pulse,viewProjection,[1,.28,.06,.48*pulse]);
+      drawBeamSegment(path[i],end,.135*pulse,camera,[.18,.70,1,.12*pulse]);
+      drawBeamSegment(path[i],end,.060*pulse,camera,[1,.16,.035,.58*pulse]);
+      drawBeamSegment(path[i],end,.030*pulse,camera,[1,.62,.09,.92*pulse]);
       gl.depthMask(true);
-      drawBeamSegment(path[i],end,.022,viewProjection,[1,.985,.82,1]);
+      drawBeamSegment(path[i],end,.011,camera,[1,1,.94,1]);
     }
   }
 
@@ -562,6 +588,11 @@ function create(options){
           // single-mirror reflective normal (+X,+Z).
           if(part.singleMirrorFace) partColor[3]=2;
           gl.uniform4fv(locations.color,new Float32Array(partColor));
+          var emissive=part.material.emissiveFactor||[0,0,0];
+          gl.uniform4fv(locations.material,new Float32Array([
+            part.material.metallicFactor,part.material.roughnessFactor,
+            Math.max(emissive[0]||0,emissive[1]||0,emissive[2]||0),0
+          ]));
           gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_SHORT, 0);
         });
       });
@@ -573,7 +604,7 @@ function create(options){
       (scene.targets || []).forEach(function(target){
         drawRing(target.r,target.c,viewProjection,[.18,.65,1,.70]);
       });
-      drawBeam(scene.path,scene.beamProgress,viewProjection,scene.beamPulse);
+      drawBeam(scene.path,scene.beamProgress,camera,scene.beamPulse);
       // WeChat composes this offscreen WebGL canvas into the main 2D canvas
       // immediately after render(). Wait for the complete frame so slower
       // mobile GPUs cannot expose a board-only or partially drawn piece frame.
