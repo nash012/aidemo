@@ -8,7 +8,7 @@ var MODEL_PREFIX = {
 };
 var RED = [[6,9],[5,9],[4,9],[3,9],[2,9],[1,9],[0,9],[7,1],[0,1]];
 var WHITE = [[7,0],[6,0],[5,0],[4,0],[3,0],[2,0],[1,0],[7,8],[0,8]];
-var MIRROR_MAP = [{0:1,3:2},{0:3,1:2},{1:0,2:3},{2:1,3:0}];
+var MIRROR_MAP = [{1:0,2:3},{3:0,2:1},{3:2,0:1},{1:2,0:3}];
 var SWITCH_MAP = [
   {1:0,0:1,3:2,2:3}, {1:2,2:1,3:0,0:3},
   {1:0,0:1,3:2,2:3}, {1:2,2:1,3:0,0:3}
@@ -42,7 +42,10 @@ function zoneCells(){ return {red:sortedCells(RED), white:sortedCells(WHITE)}; }
 function orientationAngle(type, orientation){
   if(!MODEL_PREFIX[type] || !Number.isFinite(orientation))
     return NaN;
-  if(type === "mirror") return -orientation * Math.PI / 2;
+  // The GLB's authored +X/+Z face points opposite the physical piece shown in
+  // the five official setups. The half-turn keeps its visible mirror, board
+  // orientation and reflection table on the same side.
+  if(type === "mirror") return Math.PI - orientation * Math.PI / 2;
   if(type === "switch") return Math.PI / 4 + orientation * Math.PI / 2;
   return Math.PI - orientation * Math.PI / 2;
 }
@@ -144,13 +147,18 @@ function cameraData(width,height,camera){
     viewProjection:multiply(projection,lookAt(eye,[0,0,0],[0,1,0]))};
 }
 
-function projectCell(row,col,width,height,camera){
+function projectPoint(row,col,y,width,height,camera){
+  if(!Number.isFinite(row) || !Number.isFinite(col) || !Number.isFinite(y)) return null;
   var world = cellToWorld(row,col), matrix = cameraData(width,height,camera).viewProjection;
-  var x = matrix[0]*world.x + matrix[8]*world.z + matrix[12];
-  var y = matrix[1]*world.x + matrix[9]*world.z + matrix[13];
-  var w = matrix[3]*world.x + matrix[11]*world.z + matrix[15];
+  var x = matrix[0]*world.x + matrix[4]*y + matrix[8]*world.z + matrix[12];
+  var projectedY = matrix[1]*world.x + matrix[5]*y + matrix[9]*world.z + matrix[13];
+  var w = matrix[3]*world.x + matrix[7]*y + matrix[11]*world.z + matrix[15];
   if(!Number.isFinite(w) || w <= 0) return null;
-  return {x:(x/w*.5+.5)*width, y:(.5-y/w*.5)*height};
+  return {x:(x/w*.5+.5)*width, y:(.5-projectedY/w*.5)*height};
+}
+
+function projectCell(row,col,width,height,camera){
+  return projectPoint(row,col,0,width,height,camera);
 }
 
 function modelMatrix(piece,pose){
@@ -158,7 +166,8 @@ function modelMatrix(piece,pose){
   var world = cellToWorld(pose.row,pose.col);
   var angle = orientationAngle(piece.type,pose.orientation);
   if(!Number.isFinite(angle)) angle = 0;
-  var cos = Math.cos(angle), sin = Math.sin(angle), scale = 0.68;
+  var poseScale = Number.isFinite(pose.scale) ? Math.max(0,pose.scale) : 1;
+  var cos = Math.cos(angle), sin = Math.sin(angle), scale = 0.68 * poseScale;
   return [scale*cos,0,-scale*sin,0, 0,scale,0,0, scale*sin,0,scale*cos,0,
     world.x,0.02+(pose.height||0),world.z,1];
 }
@@ -423,9 +432,11 @@ function create(options){
     gl.drawElements(gl.TRIANGLES,6,gl.UNSIGNED_SHORT,0);
   }
 
-  function drawBeam(path,progress,viewProjection){
+  function drawBeam(path,progress,viewProjection,pulseTime){
     if(!validPath(path)) return;
     progress = Number.isFinite(progress) ? Math.max(0,Math.min(1,progress)) : 1;
+    pulseTime = Number.isFinite(pulseTime) ? pulseTime : 0;
+    var pulse = .92 + Math.sin(pulseTime * 15) * .08;
     var upto = progress * (path.length - 1);
     for(var i=0;i<path.length-1 && upto>i;i++){
       var end = path[i+1], fraction = Math.min(1,upto-i);
@@ -434,9 +445,10 @@ function create(options){
         c:path[i].c+(end.c-path[i].c)*fraction
       };
       gl.depthMask(false);
-      drawBeamSegment(path[i],end,.11,viewProjection,[1,.25,.03,.28]);
+      drawBeamSegment(path[i],end,.15*pulse,viewProjection,[.20,.72,1,.14*pulse]);
+      drawBeamSegment(path[i],end,.075*pulse,viewProjection,[1,.28,.06,.48*pulse]);
       gl.depthMask(true);
-      drawBeamSegment(path[i],end,.035,viewProjection,[1,.93,.45,1]);
+      drawBeamSegment(path[i],end,.022,viewProjection,[1,.985,.82,1]);
     }
   }
 
@@ -496,7 +508,7 @@ function create(options){
       (scene.targets || []).forEach(function(target){
         drawRing(target.r,target.c,viewProjection,[.18,.65,1,.70]);
       });
-      drawBeam(scene.path,scene.beamProgress,viewProjection);
+      drawBeam(scene.path,scene.beamProgress,viewProjection,scene.beamPulse);
       // WeChat composes this offscreen WebGL canvas into the main 2D canvas
       // immediately after render(). Wait for the complete frame so slower
       // mobile GPUs cannot expose a board-only or partially drawn piece frame.
@@ -546,5 +558,6 @@ module.exports = {
   zoneCells:zoneCells,
   orientationAngle:orientationAngle,
   validateMirrorDirections:validateMirrorDirections,
+  projectPoint:projectPoint,
   projectCell:projectCell
 };

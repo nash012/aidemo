@@ -51,7 +51,7 @@ module.exports = {
     // The authored GLB's visible mirror face points along its local +X,+Z
     // normal. A ray can hit that face only while travelling against that
     // outward normal; the opposite two approaches hit the dark back plate.
-    var MIRROR_MAP = [ {0:1,3:2}, {0:3,1:2}, {1:0,2:3}, {2:1,3:0} ];
+    var MIRROR_MAP = [ {1:0,2:3}, {3:0,2:1}, {3:2,0:1}, {1:2,0:3} ];
     var SW_SLASH = {1:0,0:1,3:2,2:3};
     var SW_BACK  = {1:2,2:1,3:0,0:3};
     var LASER_DIRS = {0:[LEFT,UP], 1:[RIGHT,DOWN]};
@@ -80,9 +80,10 @@ module.exports = {
       if(pieceDrawPose){
         var pdx = x - pieceDrawPose.x, pdz = z - pieceDrawPose.z;
         var pcos = Math.cos(pieceDrawPose.angle), psin = Math.sin(pieceDrawPose.angle);
-        x = pieceDrawPose.x + pdx * pcos - pdz * psin;
-        z = pieceDrawPose.z + pdx * psin + pdz * pcos;
-        y += pieceDrawPose.height;
+        var poseScale=Number.isFinite(pieceDrawPose.scale)?pieceDrawPose.scale:1;
+        x = pieceDrawPose.x + (pdx * pcos - pdz * psin)*poseScale;
+        z = pieceDrawPose.z + (pdx * psin + pdz * pcos)*poseScale;
+        y = y*poseScale + pieceDrawPose.height;
       }
       z = -z; // 翻转z轴，使row 7（红方）在近端（屏幕底部），row 0（蓝方）在远端（屏幕顶部）
       var cosY = Math.cos(cam.yaw), sinY = Math.sin(cam.yaw);
@@ -561,7 +562,7 @@ module.exports = {
       history:{}, drawOffer:false, modal:null, flashN:0, flashPiece:null,
       eliminated:null, layoutIdx:0, undoSnapshot:null,
       particles:[], particleT:0, dropdownOpen:false, diffDropdownOpen:false,
-      playerPassiveTurns:0, turnStartPieces:null
+      playerPassiveTurns:0, turnStartPieces:null, killAnim:null
     };
 
     /* -------------------- WebGL 棋盘（失败时保留现有伪3D） -------------------- */
@@ -597,13 +598,21 @@ module.exports = {
       var targets = [];
       if(G.phase === "move" && G.sel >= 0 && G.pieces[G.sel])
         targets = moveTargets(G.pieces[G.sel]);
+      var visualPose=copySnapshotValue(sampleAiAnimation(G.aiAnim));
+      var killPose=sampleKillAnimation();
+      if(killPose){
+        if(!visualPose) visualPose={poses:{}};
+        if(!visualPose.poses) visualPose.poses={};
+        visualPose.poses[killPose.index]=killPose.pose;
+      }
       return {
         pieces:G.pieces.map(copySnapshotValue),
         selected:G.sel,
         targets:targets.map(copySnapshotValue),
         path:G.path ? G.path.map(copySnapshotValue) : null,
         beamProgress:G.animT,
-        aiPose:copySnapshotValue(sampleAiAnimation(G.aiAnim)),
+        beamPulse:G.beamPulseT,
+        aiPose:visualPose,
         camera:webglCamera(),
         setup:G.screen === "setup",
         zoneCells:WebGLRenderer.zoneCells()
@@ -644,6 +653,7 @@ module.exports = {
     function clearMatchVisualState(){
       G.path=null; G.animT=0; G.beamPulseT=0; G.sel=-1;
       G.flashN=0; G.flashPiece=null; G.eliminated=null;
+      G.killAnim=null;
       G.undoSnapshot=null; G.particles=[]; G.particleT=0;
       G.aiAnim=null; G.actionNotice=null; camAnim=null;
       for(var i=0;i<_timeouts.length;i++) clearTimeout(_timeouts[i]);
@@ -1791,6 +1801,8 @@ module.exports = {
       var sample = sampleAiAnimation(G.aiAnim);
       var pi = G.pieces.indexOf(piece);
       if(sample && sample.poses && sample.poses[pi]) return sample.poses[pi];
+      var dying=sampleKillAnimation();
+      if(dying && dying.index===pi) return dying.pose;
       return pose;
     }
 
@@ -1806,7 +1818,8 @@ module.exports = {
       drawShadow3D(wx, wz, pw, pd);
       pieceDrawPose = {
         x:wx, z:wz, height:pose.height,
-        angle:(pose.orientation - p.orientation) * Math.PI / 2
+        angle:(pose.orientation - p.orientation) * Math.PI / 2,
+        scale:Number.isFinite(pose.scale)?pose.scale:1
       };
 
       try {
@@ -1879,21 +1892,22 @@ module.exports = {
       var pulse = 0.88 + Math.sin(G.beamPulseT * 14) * 0.12;
       var glowW = Math.max(4, Math.min(6, 5 * pulse));
       var energyW = Math.max(2, Math.min(3, glowW * 0.55));
+      ctx.globalAlpha = 0.12 * pulse;
+      ctx.shadowColor = "rgba(101,217,255,0.75)"; ctx.shadowBlur = 14;
+      ctx.strokeStyle = "#65d9ff"; ctx.lineWidth = glowW * 1.9;
+      beamPath3D(pts, upto); ctx.stroke();
       ctx.globalAlpha = 0.22 * pulse;
-      ctx.shadowColor = "rgba(255,130,40,0.8)"; ctx.shadowBlur = 8;
-      ctx.strokeStyle = "#ff8a35"; ctx.lineWidth = glowW;
+      ctx.shadowColor = "rgba(255,90,54,0.85)"; ctx.shadowBlur = 9;
+      ctx.strokeStyle = "#ff5a36"; ctx.lineWidth = glowW;
       beamPath3D(pts, upto); ctx.stroke();
       ctx.globalAlpha = 0.95 * pulse;
-      ctx.shadowBlur = 0; ctx.strokeStyle = "#ffe14d"; ctx.lineWidth = energyW;
+      ctx.shadowBlur = 0; ctx.strokeStyle = "#ffd34e"; ctx.lineWidth = energyW;
       beamPath3D(pts, upto); ctx.stroke();
-      ctx.globalAlpha = 1; ctx.strokeStyle = "#fffbe6"; ctx.lineWidth = Math.max(1, Math.min(1.5, energyW * 0.5));
+      ctx.globalAlpha = 1; ctx.strokeStyle = "#fffdf2"; ctx.lineWidth = Math.max(1, Math.min(1.5, energyW * 0.5));
       beamPath3D(pts, upto); ctx.stroke();
       var head = beamHead3D(pts, upto);
       if(head){
-        ctx.fillStyle = "#ffe14d";
-        ctx.beginPath(); ctx.arc(head.x, head.y, Math.max(2, energyW * 1.2), 0, 6.283); ctx.fill();
-        ctx.fillStyle = "#fffbe6";
-        ctx.beginPath(); ctx.arc(head.x, head.y, Math.max(1, energyW * 0.55), 0, 6.283); ctx.fill();
+        drawBeamHead3D(head,energyW,pulse);
       }
       drawBeamTurns3D(pts, beamTurns(G.path), upto, pulse, energyW);
       ctx.restore();
@@ -1903,6 +1917,43 @@ module.exports = {
       if(idx >= pts.length - 1) return pts[pts.length - 1];
       var frac = upto - idx, a = pts[idx], b = pts[idx+1];
       return {x:a.x + (b.x-a.x)*frac, y:a.y + (b.y-a.y)*frac};
+    }
+    function drawBeamHead3D(head,energyW,pulse){
+      var radius=Math.max(4,energyW*2.25)*pulse;
+      var glow=ctx.createRadialGradient(head.x,head.y,0,head.x,head.y,radius*2.4);
+      glow.addColorStop(0,"rgba(255,253,242,1)");
+      glow.addColorStop(.28,"rgba(255,211,78,.95)");
+      glow.addColorStop(.62,"rgba(255,90,54,.42)");
+      glow.addColorStop(1,"rgba(101,217,255,0)");
+      ctx.globalAlpha=1;ctx.fillStyle=glow;
+      ctx.beginPath();ctx.arc(head.x,head.y,radius*2.4,0,6.283);ctx.fill();
+    }
+    function drawBeamAccents3D(){
+      if(!G.path || G.path.length<2) return;
+      var upto=(G.animT||0)*(G.path.length-1),pts=[],camera=webglCamera();
+      for(var i=0;i<G.path.length;i++){
+        if(!isBeamPoint(G.path[i])) return;
+        pts.push(WebGLRenderer.projectPoint(G.path[i].r,G.path[i].c,.34,SW,SH,camera));
+      }
+      var pulse=.92+Math.sin(G.beamPulseT*15)*.08;
+      ctx.save();ctx.lineCap="round";ctx.lineJoin="round";
+      var head=webglBeamHead(G.path,G.animT,camera);
+      if(head) drawBeamHead3D(head,2.4,pulse);
+      drawBeamTurns3D(pts,beamTurns(G.path),upto,pulse,2.6);
+      ctx.restore();
+    }
+    function webglBeamHead(path,progress,camera){
+      if(!Array.isArray(path) || path.length<2) return null;
+      for(var i=0;i<path.length;i++) if(!isBeamPoint(path[i])) return null;
+      progress=Number.isFinite(progress)?Math.max(0,Math.min(1,progress)):0;
+      var upto=progress*(path.length-1);
+      var index=Math.min(path.length-2,Math.floor(upto));
+      var fraction=index===path.length-2 && upto>=path.length-1?1:upto-index;
+      var a=path[index],b=path[index+1];
+      return WebGLRenderer.projectPoint(
+        a.r+(b.r-a.r)*fraction,a.c+(b.c-a.c)*fraction,.34,
+        SW,SH,camera||webglCamera()
+      );
     }
     function drawBeamTurns3D(pts, turns, upto, pulse, energyW){
       var life = Math.max(0, Math.min(1, upto - Math.floor(upto)));
@@ -1915,8 +1966,10 @@ module.exports = {
         var p = pts[index], alpha = Math.max(0, 1 - (upto - index) * 2) * pulse;
         if(alpha <= 0) continue;
         ctx.globalAlpha = alpha * 0.7;
-        ctx.strokeStyle = "#ffe14d"; ctx.lineWidth = 1; ctx.shadowBlur = 0;
-        ctx.beginPath(); ctx.arc(p.x, p.y, energyW * (1.4 + life), 0, 6.283); ctx.stroke();
+        ctx.strokeStyle = "#ffd34e"; ctx.lineWidth = 1.2; ctx.shadowBlur = 0;
+        var diamond=energyW*(1.45+life);
+        ctx.beginPath();ctx.moveTo(p.x,p.y-diamond);ctx.lineTo(p.x+diamond,p.y);
+        ctx.lineTo(p.x,p.y+diamond);ctx.lineTo(p.x-diamond,p.y);ctx.closePath();ctx.stroke();
         for(var s=0;s<4;s++){
           var angle = s * Math.PI / 2 + G.beamPulseT * 9;
           ctx.beginPath(); ctx.moveTo(p.x + Math.cos(angle) * energyW, p.y + Math.sin(angle) * energyW);
@@ -1952,8 +2005,9 @@ module.exports = {
       var wz = piece.row - (ROWS-1)/2;
       var ph = pieceHeight(piece.type) * 0.5;
       G.particles = [];
-      var colors = ["#ffe14d","#ff6b3a","#ff4a4a","#fffbe6"];
-      var n = 8;
+      var ownerColor=piece.owner===0?"#ff4655":"#65d9ff";
+      var colors = ["#ffd34e","#ff5a36",ownerColor,"#fffdf2"];
+      var n = 14;
       for(var i=0;i<n;i++){
         var theta = (i/n)*Math.PI*2 + Math.random()*0.5;
         var phi = Math.random()*Math.PI*0.5 + 0.2;
@@ -1963,16 +2017,20 @@ module.exports = {
           vx: Math.cos(theta)*Math.sin(phi)*speed,
           vy: Math.cos(phi)*speed + 0.5,
           vz: Math.sin(theta)*Math.sin(phi)*speed,
-          life: 0.3 + Math.random()*0.15,
-          maxLife: 0.45,
-          size: 1.5 + Math.random()*1.5,
+          life: 0.42 + Math.random()*0.2,
+          maxLife: 0.62,
+          size: 1.4 + Math.random()*1.8,
           color: colors[Math.floor(Math.random()*colors.length)]
         });
       }
       // 中心闪光环（小）
       G.particles.push({
         x: wx, y: ph, z: wz, vx:0, vy:0, vz:0,
-        life: 0.2, maxLife: 0.2, size: 12, color: "#fffbe6", ring: true
+        life: 0.34, maxLife: 0.34, size: 10, color: "#fffdf2", ring: true
+      });
+      G.particles.push({
+        x: wx, y: ph, z: wz, vx:0, vy:0, vz:0,
+        life: 0.55, maxLife: 0.55, size: 15, color: ownerColor, ring: true
       });
       G.particleT = Date.now();
     }
@@ -1992,6 +2050,59 @@ module.exports = {
           p.vz *= 0.96;
         }
       }
+    }
+
+    function startEliminationAnimation(piece){
+      if(!piece) return;
+      var index=G.pieces.indexOf(piece);
+      G.killAnim={pieceIndex:index,row:piece.row,col:piece.col,owner:piece.owner,t:0,duration:.70};
+      G.flashPiece=piece;G.flashN=6;
+      spawnExplosion3D(piece);
+    }
+
+    function updateKillAnimation(dt){
+      if(!G.killAnim) return;
+      G.killAnim.t=Math.min(G.killAnim.duration,G.killAnim.t+Math.max(0,dt||0));
+    }
+
+    function sampleKillAnimation(){
+      var anim=G.killAnim;
+      if(!anim || anim.pieceIndex<0 || !G.pieces[anim.pieceIndex]) return null;
+      var piece=G.pieces[anim.pieceIndex];
+      var t=Math.max(0,Math.min(1,anim.t/anim.duration));
+      var collapse=Math.max(0,Math.min(1,(t-.14)/.68));
+      var eased=collapse*collapse*(3-2*collapse);
+      return {index:anim.pieceIndex,progress:t,pose:{
+        row:piece.row,col:piece.col,orientation:piece.orientation+.12*eased,
+        height:.18*Math.sin(Math.PI*t)+.12*eased,
+        scale:1-.92*eased
+      }};
+    }
+
+    function drawEliminationImpact3D(){
+      var sampled=sampleKillAnimation();
+      if(!sampled) return;
+      var anim=G.killAnim,t=sampled.progress;
+      var center=project3D(anim.col-(COLS-1)/2,.48,anim.row-(ROWS-1)/2);
+      var envelope=Math.sin(Math.PI*Math.min(1,t/.82));
+      var owner=anim.owner===0?"255,70,85":"101,217,255";
+      var radius=10+34*t;
+      ctx.save();ctx.globalCompositeOperation="lighter";
+      var glow=ctx.createRadialGradient(center.x,center.y,0,center.x,center.y,radius);
+      glow.addColorStop(0,"rgba(255,253,242,"+(0.78*envelope)+")");
+      glow.addColorStop(.28,"rgba(255,211,78,"+(0.52*envelope)+")");
+      glow.addColorStop(.68,"rgba("+owner+","+(0.28*envelope)+")");
+      glow.addColorStop(1,"rgba("+owner+",0)");
+      ctx.fillStyle=glow;ctx.beginPath();ctx.arc(center.x,center.y,radius,0,6.283);ctx.fill();
+      ctx.strokeStyle="rgba("+owner+","+(0.85*(1-t))+")";ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.arc(center.x,center.y,7+25*t,0,6.283);ctx.stroke();
+      ctx.strokeStyle="rgba(255,253,242,"+(0.9*envelope)+")";ctx.lineWidth=1;
+      for(var i=0;i<4;i++){
+        var a=i*Math.PI/2+t*2.2,inner=5+8*t,outer=12+20*t;
+        ctx.beginPath();ctx.moveTo(center.x+Math.cos(a)*inner,center.y+Math.sin(a)*inner);
+        ctx.lineTo(center.x+Math.cos(a)*outer,center.y+Math.sin(a)*outer);ctx.stroke();
+      }
+      ctx.restore();
     }
 
     function drawParticles3D(){
@@ -2204,12 +2315,17 @@ module.exports = {
           if(G.flashN > 0 && G.flashPiece) drawFlash3D();
           if(G.particles && G.particles.length > 0) drawParticles3D();
           if(G.path && G.path.length > 1) drawBeam3D();
-        } else if(G.actionNotice){
-          ctx.fillStyle = "#ffe14d";
-          ctx.font = "700 14px sans-serif";
-          ctx.textAlign = "center"; ctx.textBaseline = "top";
-          ctx.fillText(G.actionNotice, SW/2, boardAreaTop + 4);
+        } else {
+          if(G.path && G.path.length > 1) drawBeamAccents3D();
+          if(G.particles && G.particles.length > 0) drawParticles3D();
+          if(G.actionNotice){
+            ctx.fillStyle = "#ffd34e";
+            ctx.font = "700 14px sans-serif";
+            ctx.textAlign = "center"; ctx.textBaseline = "top";
+            ctx.fillText(G.actionNotice, SW/2, boardAreaTop + 4);
+          }
         }
+        if(G.killAnim) drawEliminationImpact3D();
         drawMatchBoardFrame();
         buildOnBoardButtons3D();
         drawOnBoardButtons3D();
@@ -2531,21 +2647,23 @@ module.exports = {
     function finishFire(){
       _kingKilled = -1;
       if(G.eliminated){
-        G.eliminated.alive = false;
         if(G.eliminated.type === KING) _kingKilled = G.eliminated.owner;
-        G.flashPiece = G.eliminated;
-        G.flashN = 6;
-        spawnExplosion3D(G.eliminated);
+        startEliminationAnimation(G.eliminated);
         flashLoop();
       } else { afterFire(); }
     }
+    function finalizeElimination(){
+      if(G.eliminated) G.eliminated.alive=false;
+      G.killAnim=null;G.flashPiece=null;G.flashN=0;
+    }
     function flashLoop(){
       try { render(); } catch(e) {}
-      G.flashN--;
-      if(G.flashN > 0 || (G.particles && G.particles.length > 0)){
+      G.flashN=Math.max(0,G.flashN-1);
+      if(G.flashN > 0 || (G.particles && G.particles.length > 0) ||
+         (G.killAnim && G.killAnim.t < G.killAnim.duration)){
         _setTrackTimeout(flashLoop, 50);
       } else {
-        G.flashPiece = null;
+        finalizeElimination();
         afterFire();
       }
     }
@@ -3096,6 +3214,7 @@ module.exports = {
         }
         updateAiAnimation(dt);
         updateParticles(dt);
+        updateKillAnimation(dt);
       },
       render: function(){ render(); },
       onTouchStart: function(e){ handleTouchStart(e); },
@@ -3128,6 +3247,7 @@ module.exports = {
             current:G.current, phase:G.phase, sel:G.sel, mode:G.mode, aiPlayer:G.aiPlayer,
             animT:G.animT, over:G.over, winner:G.winner, drawOffer:G.drawOffer,
             flashN:G.flashN, particleT:G.particleT, playerPassiveTurns:G.playerPassiveTurns,
+            killAnim:copySnapshotValue(G.killAnim),killPose:copySnapshotValue(sampleKillAnimation()),
             rendererMode:rendererMode,
             camera:{yaw:cam.yaw, pitch:cam.pitch},
             webglCamera:webglCamera(),
@@ -3145,12 +3265,19 @@ module.exports = {
       },
       _debugEffects: {
         beamTurns: function(path){ return beamTurns(path).map(copySnapshotValue); },
+        webglBeamHead: function(path,progress){ return copySnapshotValue(webglBeamHead(path,progress)); },
         beginAiAction: applyAiAction,
+        beginElimination: function(index){
+          if(index>=0 && index<G.pieces.length){G.eliminated=G.pieces[index];startEliminationAnimation(G.eliminated);}
+        },
+        completeElimination: finalizeElimination,
         setPieces: function(pieces){ G.pieces = pieces.map(copySnapshotValue); },
         snapshot: function(){ return {
           pieces:G.pieces.map(copySnapshotValue),
           aiAnim:copySnapshotValue(G.aiAnim),
           actionNotice:G.actionNotice, busy:G.busy, phase:G.phase,
+          killAnim:copySnapshotValue(G.killAnim),killPose:copySnapshotValue(sampleKillAnimation()),
+          particleCount:G.particles.length,
           timeoutCount:_timeouts.length
         }; }
       },

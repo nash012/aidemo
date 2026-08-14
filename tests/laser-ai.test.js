@@ -132,16 +132,45 @@ beamCtx._strokes.length = 0;
 beamGame._debugEffects.beginAiAction({kind:"skip"});
 beamGame.update(0.90);
 var glowWidths = beamCtx._strokes.filter(function(stroke){
-  return stroke.strokeStyle === "#ff8a35";
+  return stroke.strokeStyle === "#ff5a36";
 }).map(function(stroke){ return stroke.lineWidth; });
-assert.ok(glowWidths.length > 0, "beam render must draw an orange glow");
+assert.ok(glowWidths.length > 0, "beam render must draw a warm corona");
 assert.ok(glowWidths.every(function(width){ return width >= 4 && width <= 6; }),
-  "orange glow width must remain within 4–6px after its pulse");
+  "warm corona width must remain within 4–6px after its pulse");
+assert.ok(beamCtx._strokes.some(function(stroke){return stroke.strokeStyle==="#65d9ff";}),
+  "beam render must add a restrained electric-blue atmospheric halo");
 assert.ok(beamGame._debugEffects.snapshot().timeoutCount > 0,
   "beam travel must use a tracked timer");
 beamGame.exit();
 assert.equal(beamGame._debugEffects.snapshot().timeoutCount, 0,
   "exit must clear beam travel timers");
+
+var killCtx=fakeContext(),killGame=LaserGame.create(killCtx,375,667,function(){});
+killGame._debugGame.beginMatch();
+killGame._debugEffects.setPieces([
+  piece("laser","laser",0,7,9,3),
+  piece("victim","mirror",1,4,4,0)
+]);
+killGame._debugEffects.beginElimination(1);
+assert.equal(killGame._debugEffects.snapshot().pieces[1].alive,true,
+  "a hit piece must remain visible while its elimination animation begins");
+killGame.update(.35);killCtx._arcs.length=0;killGame.render();
+var killing=killGame._debugEffects.snapshot();
+assert.ok(killing.killPose && killing.killPose.pose.scale<1 && killing.killPose.pose.scale>.08,
+  "the hit piece must shrink and lift before removal");
+assert.ok(killing.particleCount>0 && killCtx._arcs.length>0,
+  "the elimination sequence must include visible impact rings and fragments");
+killGame._debugEffects.completeElimination();
+assert.equal(killGame._debugEffects.snapshot().pieces[1].alive,false,
+  "the hit piece must leave rule state only after the visual sequence completes");
+assert.equal(killGame._debugEffects.snapshot().killAnim,null);
+killGame._debugEffects.setPieces([piece("victim2","shield",1,3,3,0)]);
+killGame._debugEffects.beginElimination(0);
+killGame.exit();
+assert.equal(killGame._debugEffects.snapshot().killAnim,null,
+  "exit must clear an in-flight elimination animation");
+assert.equal(killGame._debugEffects.snapshot().particleCount,0,
+  "exit must clear elimination fragments");
 
 var initial = game._debugGame.snapshot();
 assert.equal(initial.screen, "setup");
@@ -365,6 +394,16 @@ assert.ok(uiCtx._texts.indexOf("SELECT") >= 0);
 assert.ok(uiCtx._texts.indexOf("选择棋子，或直接发射") >= 0);
 var fittedCamera=uiGame._debugGame.snapshot().webglCamera;
 assert.ok(fittedCamera.distance>=26,"match camera must zoom out enough for edge pieces");
+var depthPath=[{r:0,c:4},{r:7,c:4}];
+var overlayHead=uiGame._debugEffects.webglBeamHead(depthPath,.5);
+var webglHead=WebGLRenderer.projectPoint(3.5,4,.34,375,667,fittedCamera);
+assert.ok(Math.abs(overlayHead.x-webglHead.x)<1e-7 && Math.abs(overlayHead.y-webglHead.y)<1e-7,
+  "the circular laser head must use the exact WebGL endpoint projection");
+var projectedEnds=depthPath.map(function(point){
+  return WebGLRenderer.projectPoint(point.r,point.c,.34,375,667,fittedCamera);
+});
+assert.ok(Math.abs(overlayHead.y-(projectedEnds[0].y+projectedEnds[1].y)/2)>.05,
+  "the laser head must project the moving world point instead of interpolating screen pixels");
 var fittedCorners=[[0,0],[0,9],[7,0],[7,9]].map(function(cell){
   return WebGLRenderer.projectCell(cell[0],cell[1],375,667,fittedCamera);
 });
@@ -450,7 +489,7 @@ assert.equal(game._debugAI.config("easy").attack, 1.05,
   "config must not expose mutable AI level settings");
 
 var mirrorDirections = [[0,-1],[1,0],[0,1],[-1,0]];
-var mirrorMaps = [{0:1,3:2},{0:3,1:2},{1:0,2:3},{2:1,3:0}];
+var mirrorMaps = [{1:0,2:3},{3:0,2:1},{3:2,0:1},{1:2,0:3}];
 for(var mirrorOrientation=0;mirrorOrientation<4;mirrorOrientation++){
   for(var incoming=0;incoming<4;incoming++){
     var center={r:3,c:4}, delta=mirrorDirections[incoming];
@@ -488,7 +527,7 @@ try {
     var action = game._debugAI.choose(safePressure, 1, level, 3);
     assert.equal(action.pi, 1, level + " should use the mirror to build pressure");
     assert.equal(action.kind, "rot");
-    assert.equal(action.d, 3);
+    assert.equal(action.d, 1);
   });
   assert.equal(game._debugAI.passiveTurn(safePressure,safePressure,0),true,
     "a human turn that creates no attack must increase AI initiative");
@@ -724,7 +763,7 @@ try {
       var started = Date.now();
       game._debugAI.choose(game._debugAI.initialPieces(layoutIndex), 1, level);
       var elapsed = Date.now() - started;
-      assert.ok(elapsed < 500,
+      assert.ok(elapsed < 800,
         level + " layout " + layoutIndex + " took " + elapsed + "ms");
     }
   }

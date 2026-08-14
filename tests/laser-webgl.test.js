@@ -155,6 +155,15 @@ for(var row=0;row<8;row++){
 }
 assert.equal(WebGLRenderer.worldToCell(-5.1, 0), null,
   "world positions outside the board must not select a cell");
+var flatProjection=WebGLRenderer.projectCell(3,4,640,480,{yaw:.35,pitch:.95,distance:22,offsetY:-27});
+var sameFlatProjection=WebGLRenderer.projectPoint(3,4,0,640,480,{yaw:.35,pitch:.95,distance:22,offsetY:-27});
+assert.deepEqual(sameFlatProjection,flatProjection,
+  "the shared WebGL point projector must preserve board-cell projection at ground height");
+var beamProjection=WebGLRenderer.projectPoint(3,4,.34,640,480,{yaw:.35,pitch:.95,distance:22,offsetY:-27});
+assert.ok(beamProjection && beamProjection.y<flatProjection.y,
+  "the laser endpoint projector must include the beam's real WebGL height");
+assert.equal(WebGLRenderer.projectPoint(3,4,NaN,640,480,{}),null,
+  "invalid overlay coordinates must fail closed");
 
 var zones = WebGLRenderer.zoneCells();
 assert.deepEqual(zones.red, [
@@ -185,8 +194,8 @@ assert.equal(WebGLRenderer.validateMirrorDirections([1,0]), false,
   "a mirror normal rotated away from the authored face must fail rule calibration");
 assert.equal(WebGLRenderer.validateMirrorDirections([-singleNormal[0],-singleNormal[1]]), false,
   "the back of a single mirror must not be accepted as its reflective face");
-assert.equal(WebGLRenderer.orientationAngle("mirror",0), 0,
-  "the authored hypotenuse face must need no hidden 45-degree correction");
+assert.equal(WebGLRenderer.orientationAngle("mirror",0), Math.PI,
+  "the authored single-mirror face must turn 180 degrees to match the official setup direction");
 
 function fakeGl(options){
   options = options || {};
@@ -302,13 +311,15 @@ observedRenderer.render({
   pieces:renderScene.pieces,
   camera:renderScene.camera,
   selected:-1, targets:[], path:null,
-  aiPose:{poses:{0:{row:4,col:6,height:0.3,orientation:2}}}
+  aiPose:{poses:{0:{row:4,col:6,height:0.3,orientation:2,scale:.5}}}
 });
 var animatedModel = observedGl._calls.modelMatrices[observedGl._calls.modelMatrices.length - 1];
 assert.ok(Math.abs(animatedModel[12] - 1.5) < 1e-6 &&
   Math.abs(animatedModel[13] - 0.32) < 1e-6 &&
   Math.abs(animatedModel[14] - 0.5) < 1e-6,
   "AI animation poses must drive the rendered GLB instance before rule state commits");
+assert.ok(Math.abs(Math.hypot(animatedModel[0],animatedModel[2])-.34)<1e-6,
+  "elimination poses must be able to shrink a rendered GLB before it disappears");
 
 var drawsBeforeBaseline = observedGl._calls.drawElements;
 observedRenderer.render({
@@ -334,8 +345,8 @@ observedRenderer.render({
   path:[{r:0,c:0},{r:0,c:1},{r:2,c:1}], beamProgress:1
 });
 var beamDraws = observedGl._calls.drawElements - drawsWithoutBeam - baseFrameDraws;
-assert.equal(beamDraws, 4,
-  "each valid laser segment must draw one glow layer and one bright core");
+assert.equal(beamDraws, 6,
+  "each valid laser segment must draw a cyan halo, warm energy layer and white-hot core");
 assert.deepEqual(observedGl._calls.depthMasks.slice(-4), [false,true,false,true],
   "each translucent glow must stop writing depth before its bright core is drawn");
 var drawsBeforeHalfBeam = observedGl._calls.drawElements;
@@ -343,7 +354,7 @@ observedRenderer.render({
   pieces:[], camera:renderScene.camera, selected:-1, targets:[], aiPose:null,
   path:[{r:0,c:0},{r:0,c:1},{r:2,c:1}], beamProgress:0.5
 });
-assert.equal(observedGl._calls.drawElements - drawsBeforeHalfBeam - baseFrameDraws, 2,
+assert.equal(observedGl._calls.drawElements - drawsBeforeHalfBeam - baseFrameDraws, 3,
   "halfway beam progress must draw only the first completed segment layers");
 var drawsBeforeZeroBeam = observedGl._calls.drawElements;
 observedRenderer.render({
