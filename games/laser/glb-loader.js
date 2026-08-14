@@ -174,7 +174,7 @@ function validateMirrorPlane(node, model){
      node.scale.some(function(v){ return v !== 1; }))
     fail("mirror surface transform is unsupported");
   var min = [Infinity,Infinity,Infinity], max = [-Infinity,-Infinity,-Infinity];
-  var axisArea = [0,0,0], alignedArea = 0, totalArea = 0;
+  var triangles = [], alignedArea = 0, totalArea = 0, dominant = null;
   mesh.primitives.forEach(function(primitive){
     for(var i=0;i<primitive.positions.length;i+=3) for(var axis=0;axis<3;axis++){
       min[axis] = Math.min(min[axis], primitive.positions[i+axis]);
@@ -188,7 +188,10 @@ function validateMirrorPlane(node, model){
       var area=Math.hypot(cross[0],cross[1],cross[2]);
       if(!area) continue;
       totalArea+=area;
-      for(var axis=0;axis<3;axis++) axisArea[axis]+=Math.abs(cross[axis]);
+      var geometric=[cross[0]/area,cross[1]/area,cross[2]/area];
+      triangles.push({area:area,normal:geometric});
+      if(Math.abs(geometric[1])<.1 && (!dominant || area>dominant.area))
+        dominant={area:area,normal:geometric};
       var normal=[0,0,0];
       for(var vertex=0;vertex<3;vertex++) for(var component=0;component<3;component++)
         normal[component]+=primitive.normals[[ia,ib,ic][vertex]+component];
@@ -197,14 +200,24 @@ function validateMirrorPlane(node, model){
         alignedArea+=area;
     }
   });
-  var size = [max[0]-min[0],max[1]-min[1],max[2]-min[2]];
-  if(!Number.isFinite(size[2]) || size[2] >= Math.min(size[0],size[1]) ||
-     axisArea[2] <= Math.max(axisArea[0],axisArea[1]))
-    fail("mirror surface geometry must define a vertical Z-facing plane");
+  if(!dominant) fail("mirror surface geometry must define a vertical plane");
+  var planeArea=triangles.reduce(function(sum,triangle){
+    var dot=triangle.normal[0]*dominant.normal[0]+triangle.normal[1]*dominant.normal[1]+
+      triangle.normal[2]*dominant.normal[2];
+    return sum+(Math.abs(dot)>.98 ? triangle.area : 0);
+  },0);
+  if(!totalArea || planeArea/totalArea<.8)
+    fail("mirror surface geometry must be a thin vertical plane");
   if(!totalArea || alignedArea / totalArea < .9) fail("mirror surface normal data is inconsistent");
-  var centerZ=(min[2]+max[2])/2;
-  if(Math.abs(centerZ)<1e-6) fail("mirror surface side is ambiguous");
-  return [0,centerZ>0 ? 1 : -1];
+  var centerX=(min[0]+max[0])/2, centerZ=(min[2]+max[2])/2;
+  var nx=dominant.normal[0], nz=dominant.normal[2];
+  var horizontal=Math.hypot(nx,nz);
+  if(horizontal<.99) fail("mirror surface normal must be horizontal");
+  nx/=horizontal; nz/=horizontal;
+  var side=centerX*nx+centerZ*nz;
+  if(Math.abs(side)<1e-6) fail("mirror surface side is ambiguous");
+  if(side<0){ nx=-nx; nz=-nz; }
+  return [nx,nz];
 }
 
 function mirrorSurfaceNormals(model){

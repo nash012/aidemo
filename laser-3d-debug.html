@@ -45,7 +45,6 @@ body { display:flex; align-items:center; justify-content:center; font-family:sys
   <div id="toolbar">
     <button id="btn-reset-view">重置视角</button>
     <button id="btn-toggle-dbg">调试信息</button>
-    <button id="btn-restart">重新开始</button>
   </div>
 </div>
 
@@ -223,10 +222,6 @@ function require(path) {
   });
   document.getElementById('btn-toggle-dbg').addEventListener('click', function(){
     dbgEl.classList.toggle('show');
-  });
-  document.getElementById('btn-restart').addEventListener('click', function(){
-    if (game.exit) game.exit();
-    game = LaserGame.create(ctx, W, H, function(){}, debugPlatform());
   });
 
   // ---- 主循环 ----

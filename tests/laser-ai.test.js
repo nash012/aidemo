@@ -4,6 +4,7 @@ var assert = require("node:assert");
 var fs = require("node:fs");
 var path = require("node:path");
 var LaserGame = require("../games/laser/laser-game.js");
+var WebGLRenderer = require("../games/laser/webgl-renderer.js");
 
 function fakeContext(){
   var gradient = { addColorStop:function(){} };
@@ -63,10 +64,10 @@ function matchCellPoint(row, col){
   var pitch = 0.95;
   var z = -(row - 3.5);
   var depth = z * Math.cos(pitch) + 15;
-  var scale = 461.25 / depth;
+  var scale = 405 / depth;
   return {
     clientX:(col - 4.5) * scale + 187.5,
-    clientY:-z * Math.sin(pitch) * scale + 306.5
+    clientY:-z * Math.sin(pitch) * scale + 326.5
   };
 }
 
@@ -206,9 +207,12 @@ assert.deepEqual(afterInvalidDifficulty.pieces, validSetup.pieces,
 var cameraGame = LaserGame.create(fakeContext(), 375, 667, function(){});
 cameraGame._debugGame.beginMatch();
 var matchCamera = cameraGame._debugGame.snapshot().camera;
+var straightFitDistance = cameraGame._debugGame.snapshot().webglCamera.distance;
 cameraGame.cameraControl(40, 30);
 assert.notDeepEqual(cameraGame._debugGame.snapshot().camera, matchCamera,
   "external camera control must remain active during play");
+assert.ok(cameraGame._debugGame.snapshot().webglCamera.distance > straightFitDistance,
+  "angled boards must automatically pull the WebGL camera back to keep every edge visible");
 matchCamera = cameraGame._debugGame.snapshot().camera;
 cameraGame.onTouchStart({touches:[{clientX:100, clientY:100}]});
 cameraGame.onTouchMove({touches:[{clientX:120, clientY:100}]});
@@ -254,6 +258,18 @@ for(var previewLayout = 0; previewLayout < 5; previewLayout++){
     setupGame.exit();
   }
 });
+
+for(var shieldLayout=0;shieldLayout<5;shieldLayout++){
+  var shieldPieces=game._debugAI.initialPieces(shieldLayout).filter(function(p){
+    return p.type === "shield";
+  });
+  assert.ok(shieldPieces.filter(function(p){ return p.owner===0; }).every(function(p){
+    return p.orientation===0;
+  }), "red shields must face the opponent in layout " + shieldLayout);
+  assert.ok(shieldPieces.filter(function(p){ return p.owner===1; }).every(function(p){
+    return p.orientation===2;
+  }), "blue shields must face the opponent in layout " + shieldLayout);
+}
 
 game._debugGame.selectLayout(2);
 game._debugGame.selectDifficulty("easy");
@@ -302,7 +318,21 @@ assert.ok(uiCtx._texts.indexOf("选择阵型") >= 0);
 assert.ok(uiCtx._texts.indexOf("选择难度") >= 0);
 assert.ok(uiCtx._texts.indexOf("规则介绍") >= 0);
 assert.ok(uiCtx._texts.indexOf("开始游戏") >= 0);
+assert.ok(uiCtx._texts.indexOf("主动构建反射路线，并预判玩家下一步回应") >= 0);
 assert.equal(uiGame._debugGame.snapshot().screen, "setup");
+
+[
+  ["easy","主动推进并尝试简单攻击，仍会保留容错空间"],
+  ["normal","主动构建反射路线，并预判玩家下一步回应"],
+  ["hard","持续施压并推演多回合，优先形成致命光路"]
+].forEach(function(expectation){
+  var descCtx=fakeContext(), descGame=LaserGame.create(descCtx,375,667,function(){});
+  descGame._debugGame.selectDifficulty(expectation[0]);
+  descCtx._texts.length=0; descGame.render();
+  assert.ok(descCtx._texts.indexOf(expectation[1])>=0,
+    expectation[0]+" difficulty must show its new tactical description");
+  descGame.exit();
+});
 
 uiGame._debugGame.openRules();
 uiGame.onTouchStart({touches:[{clientX:188, clientY:450}]});
@@ -326,7 +356,29 @@ uiCtx._texts.length = 0;
 uiGame.render();
 assert.equal(uiCtx._texts.indexOf("选择难度"), -1);
 assert.equal(uiCtx._texts.indexOf("阵型选择"), -1);
-assert.ok(uiCtx._texts.indexOf("返回设置") >= 0);
+assert.equal(uiCtx._texts.indexOf("返回设置"), -1);
+assert.equal(uiCtx._texts.indexOf("重开"), -1);
+assert.ok(uiCtx._texts.indexOf("OPTICAL MATCH / LIVE ARRAY") >= 0);
+assert.ok(uiCtx._texts.indexOf("红方行动") >= 0);
+assert.ok(uiCtx._texts.indexOf("TACTICAL FIELD / 10×8") >= 0);
+assert.ok(uiCtx._texts.indexOf("SELECT") >= 0);
+assert.ok(uiCtx._texts.indexOf("选择棋子，或直接发射") >= 0);
+var fittedCamera=uiGame._debugGame.snapshot().webglCamera;
+assert.ok(fittedCamera.distance>=26,"match camera must zoom out enough for edge pieces");
+var fittedCorners=[[0,0],[0,9],[7,0],[7,9]].map(function(cell){
+  return WebGLRenderer.projectCell(cell[0],cell[1],375,667,fittedCamera);
+});
+assert.ok(Math.min.apply(null,fittedCorners.map(function(point){return point.x;}))>=30 &&
+  Math.max.apply(null,fittedCorners.map(function(point){return point.x;}))<=345,
+  "all four board corners must retain horizontal room for full 3D pieces");
+
+touch(uiGame, matchCellPoint(7,5));
+touch(uiGame, matchCellPoint(6,5));
+assert.equal(uiGame._debugGame.snapshot().phase, "fire");
+uiCtx._texts.length = 0;
+uiGame.render();
+assert.ok(uiCtx._texts.indexOf("回合结束") >= 0);
+assert.equal(uiCtx._texts.indexOf("跳过"), -1);
 
 uiGame._debugGame.requestReturn();
 uiCtx._texts.length = 0;
@@ -338,7 +390,18 @@ uiGame.exit();
 
 var startCtx = fakeContext();
 var startGame = LaserGame.create(startCtx, 375, 667, function(){});
-var startTouch = {clientX:280, clientY:565};
+// Setup controls use an optical formation rail and a bottom-anchored start action.
+var layoutTouch = {clientX:269, clientY:431};
+startGame.onTouchStart({touches:[layoutTouch]});
+startGame.onTouchEnd({touches:[], changedTouches:[layoutTouch]});
+assert.equal(startGame._debugGame.snapshot().layoutIdx, 3,
+  "the optical formation rail must select the touched layout");
+var difficultyTouch = {clientX:75, clientY:488};
+startGame.onTouchStart({touches:[difficultyTouch]});
+startGame.onTouchEnd({touches:[], changedTouches:[difficultyTouch]});
+assert.equal(startGame._debugGame.snapshot().difficulty, "easy",
+  "the segmented difficulty control must select the touched level");
+var startTouch = {clientX:280, clientY:590};
 startGame.onTouchStart({touches:[startTouch]});
 startGame.onTouchEnd({touches:[], changedTouches:[startTouch]});
 assert.equal(startGame._debugGame.snapshot().screen, "playing",
@@ -354,21 +417,48 @@ var safePressure = [
 ];
 
 assert.deepEqual(game._debugAI.config("easy"), {
-  attack:0.65, defense:1.25, guard:1.7,
-  reply:0, candidates:24, variety:5, depth:1
+  attack:1.05, defense:1.10, guard:1.15, reply:0,
+  advance:0.55, initiative:1.10, passive:0.24,
+  candidates:24, variety:3.0, depth:1
 });
 assert.deepEqual(game._debugAI.config("normal"), {
-  attack:2.0, defense:0.9, guard:0.8,
-  reply:0.55, candidates:40, variety:1.5, depth:2
+  attack:2.35, defense:1.00, guard:0.90, reply:0.65,
+  advance:0.90, initiative:1.60, passive:0.32,
+  candidates:40, variety:1.0, depth:2
 });
 assert.deepEqual(game._debugAI.config("hard"), {
-  attack:1.2, defense:1.2, guard:1.5,
-  reply:1.0, candidates:40, variety:0.5, depth:3
+  attack:2.15, defense:1.20, guard:1.10, reply:1.0,
+  advance:1.10, initiative:2.00, passive:0.38,
+  candidates:40, variety:0.25, depth:3
 });
 var easyConfig = game._debugAI.config("easy");
 easyConfig.attack = 99;
-assert.equal(game._debugAI.config("easy").attack, 0.65,
+assert.equal(game._debugAI.config("easy").attack, 1.05,
   "config must not expose mutable AI level settings");
+
+var mirrorDirections = [[0,-1],[1,0],[0,1],[-1,0]];
+var mirrorMaps = [{0:1,3:2},{0:3,1:2},{1:0,2:3},{2:1,3:0}];
+for(var mirrorOrientation=0;mirrorOrientation<4;mirrorOrientation++){
+  for(var incoming=0;incoming<4;incoming++){
+    var center={r:3,c:4}, delta=mirrorDirections[incoming];
+    var reflectionPieces=[
+      piece("laser","laser",0,center.r-delta[1],center.c-delta[0],incoming),
+      piece("mirror","mirror",1,center.r,center.c,mirrorOrientation)
+    ];
+    var reflection=game._debugAI.resolve(reflectionPieces,0,{kind:"skip"});
+    var outgoing=mirrorMaps[mirrorOrientation][incoming];
+    if(outgoing===undefined){
+      assert.equal(reflection.eliminated && reflection.eliminated.id,"mirror",
+        "laser must destroy the non-reflective back at orientation "+mirrorOrientation+" input "+incoming);
+    } else {
+      var outDelta=mirrorDirections[outgoing];
+      assert.equal(reflection.eliminated,null,
+        "laser must survive the reflective face at orientation "+mirrorOrientation+" input "+incoming);
+      assert.deepEqual(reflection.path[2],{r:center.r+outDelta[1],c:center.c+outDelta[0]},
+        "laser must leave in the mapped direction at orientation "+mirrorOrientation+" input "+incoming);
+    }
+  }
+}
 
 var mateThreat = [
   piece("bl", "laser", 1, 0, 0, 2),
@@ -381,12 +471,14 @@ var mateThreat = [
 var savedRandom = Math.random;
 Math.random = function(){ return 0; };
 try {
-  ["easy", "normal"].forEach(function(level){
-    var action = game._debugAI.choose(safePressure, 1, level);
+  ["easy", "normal", "hard"].forEach(function(level){
+    var action = game._debugAI.choose(safePressure, 1, level, 3);
     assert.equal(action.pi, 1, level + " should use the mirror to build pressure");
     assert.equal(action.kind, "rot");
-    assert.equal(action.d, 1);
+    assert.equal(action.d, 3);
   });
+  assert.equal(game._debugAI.passiveTurn(safePressure,safePressure,0),true,
+    "a human turn that creates no attack must increase AI initiative");
 
   var hard = game._debugAI.choose(mateThreat, 1, "hard");
   assert.equal(hard.pi, 2, "hard should move the exposed king");
@@ -509,7 +601,7 @@ try {
   swapCtx._arcs.length = 0;
   swapGame.update(0.70);
   assert.equal(swapCtx._arcs.filter(function(arc){
-    return arc.strokeStyle.indexOf("rgba(255,225,77,") === 0;
+    return typeof arc.strokeStyle === "string" && arc.strokeStyle.indexOf("rgba(255,225,77,") === 0;
   }).length, 2, "swap landing must pulse both destinations");
   swapGame.update(0.09);
   assert.deepEqual(swapGame._debugGame.snapshot().pieces, animatedSwap,
@@ -579,7 +671,7 @@ try {
   try {
     var thinkingGame = LaserGame.create(fakeContext(), 375, 667, function(){});
     thinkingGame._debugGame.beginMatch();
-    touch(thinkingGame, {clientX:53, clientY:557});
+    touch(thinkingGame, {clientX:53, clientY:596});
     assert.equal(thinkingGame._debugGame.snapshot().phase, "anim");
     assert.equal(thinkingGame._debugGame.snapshot().busy, true);
     touch(thinkingGame, matchCellPoint(7, 5));
@@ -587,12 +679,18 @@ try {
       "player touch must not select a piece during human beam travel");
 
     fakeNow += 10000;
-    pendingTimers.shift().fn();
-    pendingTimers.shift().fn();
-    pendingTimers.shift().fn();
+    for(var timerStep=0;timerStep<20;timerStep++){
+      var timerState=thinkingGame._debugGame.snapshot();
+      if(timerState.current===1 && timerState.busy) break;
+      assert.ok(pendingTimers.length,"laser resolution must eventually schedule the AI turn");
+      thinkingGame.update(0.1);
+      pendingTimers.shift().fn();
+    }
     var thinking = thinkingGame._debugGame.snapshot();
     assert.equal(thinking.current, 1);
     assert.equal(thinking.busy, true);
+    assert.equal(thinking.playerPassiveTurns,1,
+      "a non-attacking human turn must increase the AI initiative counter");
     assert.ok(thinkingGame._debugEffects.snapshot().timeoutCount > 0,
       "AI thinking must use a tracked timer");
     touch(thinkingGame, matchCellPoint(0, 6));
@@ -720,18 +818,17 @@ try {
   delete require.cache[require.resolve("../game.js")];
   require("../game.js");
 
-  var laserCard = {clientX:100, clientY:320};
-  suiteHandlers.start({touches:[laserCard]});
-  suiteHandlers.end({touches:[], changedTouches:[laserCard]});
-  suiteCtx._texts.length = 0;
-  suiteHandlers.start({touches:[{clientX:20, clientY:20}]});
+  // App starts directly on the laser setup screen (no menu)
   suiteFrame(16);
-  assert.ok(suiteCtx._texts.some(function(text){ return text.indexOf("游戏合集") >= 0; }),
-    "suite back must leave laser setup for the game menu");
+  assert.ok(suiteCtx._texts.indexOf("激光镭射象棋") >= 0,
+    "suite must start directly on laser setup screen");
+  assert.ok(suiteCtx._texts.indexOf("选择阵型") >= 0,
+    "suite setup must show formation selector");
+  assert.ok(suiteCtx._texts.indexOf("开始游戏") >= 0,
+    "suite setup must show start button");
 
-  suiteHandlers.start({touches:[laserCard]});
-  suiteHandlers.end({touches:[], changedTouches:[laserCard]});
-  var productionStart = {clientX:280, clientY:565};
+  // Click "开始游戏" to start playing
+  var productionStart = {clientX:280, clientY:590};
   suiteHandlers.start({touches:[productionStart]});
   suiteHandlers.end({touches:[], changedTouches:[productionStart]});
   suiteCtx._texts.length = 0;

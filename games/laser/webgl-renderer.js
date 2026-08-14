@@ -8,7 +8,7 @@ var MODEL_PREFIX = {
 };
 var RED = [[6,9],[5,9],[4,9],[3,9],[2,9],[1,9],[0,9],[7,1],[0,1]];
 var WHITE = [[7,0],[6,0],[5,0],[4,0],[3,0],[2,0],[1,0],[7,8],[0,8]];
-var MIRROR_MAP = [{1:0,2:3},{3:0,2:1},{3:2,0:1},{1:2,0:3}];
+var MIRROR_MAP = [{0:1,3:2},{0:3,1:2},{1:0,2:3},{2:1,3:0}];
 var SWITCH_MAP = [
   {1:0,0:1,3:2,2:3}, {1:2,2:1,3:0,0:3},
   {1:0,0:1,3:2,2:3}, {1:2,2:1,3:0,0:3}
@@ -42,12 +42,12 @@ function zoneCells(){ return {red:sortedCells(RED), white:sortedCells(WHITE)}; }
 function orientationAngle(type, orientation){
   if(!MODEL_PREFIX[type] || !Number.isFinite(orientation))
     return NaN;
-  if(type === "mirror") return Math.PI / 4 - orientation * Math.PI / 2;
+  if(type === "mirror") return -orientation * Math.PI / 2;
   if(type === "switch") return Math.PI / 4 + orientation * Math.PI / 2;
   return Math.PI - orientation * Math.PI / 2;
 }
 
-function validateMirrorDirections(authoredNormal){
+function validateMirrorDirections(authoredNormal,doubleSided){
   authoredNormal=authoredNormal || [0,1];
   if(!Array.isArray(authoredNormal) || authoredNormal.length!==2 ||
      !Number.isFinite(authoredNormal[0]) || !Number.isFinite(authoredNormal[1])) return false;
@@ -69,16 +69,24 @@ function validateMirrorDirections(authoredNormal){
     return best;
   }
   for(var orientation=0;orientation<4;orientation++){
-    var single = MIRROR_MAP[orientation];
-    var singleAngle = orientationAngle("mirror", orientation);
-    var singleInputs = Object.keys(single);
-    for(var s=0;s<singleInputs.length;s++){
-      var inDir = Number(singleInputs[s]);
-      if(reflected(inDir, singleAngle) !== single[inDir]) return false;
+    if(doubleSided){
+      var switchTable = SWITCH_MAP[orientation];
+      var switchAngle = orientationAngle("switch", orientation);
+      for(var input=0;input<4;input++) if(reflected(input, switchAngle) !== switchTable[input]) return false;
+    } else {
+      var single = MIRROR_MAP[orientation];
+      var singleAngle = orientationAngle("mirror", orientation);
+      var nx=Math.cos(singleAngle)*localX+Math.sin(singleAngle)*localZ;
+      var nz=-Math.sin(singleAngle)*localX+Math.cos(singleAngle)*localZ;
+      for(var inDir=0;inDir<4;inDir++){
+        // The GLB normal points out of the visible mirror surface. Incoming
+        // light must travel against it; a positive dot product is the back.
+        var facesMirror=directions[inDir][0]*nx+directions[inDir][1]*nz<-.5;
+        var mapped=single[inDir];
+        if(facesMirror !== (mapped!==undefined)) return false;
+        if(facesMirror && reflected(inDir,singleAngle)!==mapped) return false;
+      }
     }
-    var switchTable = SWITCH_MAP[orientation];
-    var switchAngle = orientationAngle("switch", orientation);
-    for(var input=0;input<4;input++) if(reflected(input, switchAngle) !== switchTable[input]) return false;
   }
   return true;
 }
@@ -190,11 +198,15 @@ function create(options){
       if(!gl) throw new Error("WebGL unavailable");
       vertex = compile(gl.VERTEX_SHADER,
         "attribute vec3 aPosition; attribute vec3 aNormal; uniform mat4 uMvp; uniform mat4 uModel;" +
-        "varying vec3 vNormal; void main(){vNormal=mat3(uModel)*aNormal;gl_Position=uMvp*vec4(aPosition,1.0);}");
+        "varying vec3 vNormal; varying vec3 vLocalNormal; void main(){vLocalNormal=aNormal;" +
+        "vNormal=mat3(uModel)*aNormal;gl_Position=uMvp*vec4(aPosition,1.0);}");
       fragment = compile(gl.FRAGMENT_SHADER,
-        "precision mediump float; varying vec3 vNormal; uniform vec4 uColor;" +
-        "void main(){float l=.58+.42*max(dot(normalize(vNormal),normalize(vec3(.3,.8,.5))),0.0);" +
-        "gl_FragColor=vec4(uColor.rgb*l,uColor.a);}");
+        "precision mediump float; varying vec3 vNormal; varying vec3 vLocalNormal; uniform vec4 uColor;" +
+        "void main(){vec4 base=uColor;bool oneSided=base.a>1.5;" +
+        "float mirrorSide=dot(normalize(vLocalNormal),normalize(vec3(1.0,0.0,1.0)));" +
+        "if(oneSided&&mirrorSide<.65)base=vec4(.025,.030,.042,1.0);else base.a=min(base.a,1.0);" +
+        "float l=.58+.42*max(dot(normalize(vNormal),normalize(vec3(.3,.8,.5))),0.0);" +
+        "gl_FragColor=vec4(base.rgb*l,base.a);}");
       program = gl.createProgram();
       if(!program) throw new Error("program allocation failed");
       gl.attachShader(program, vertex); gl.attachShader(program, fragment); gl.linkProgram(program);
@@ -316,6 +328,7 @@ function create(options){
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(primitive.indices), gl.STATIC_DRAW);
         });
         item.count=primitive.indices.length; item.material=primitive.material;
+        item.singleMirrorFace=key.indexOf("single_mirror_")===0 && /_Mirror_Face$/.test(mesh.name);
         resources[key].push(item);
       });
     });
@@ -337,7 +350,9 @@ function create(options){
           var model=GlbLoader.parseGlb(data);
           if(key.indexOf("single_mirror_") === 0 || key.indexOf("double_mirror_") === 0){
             var normals=GlbLoader.mirrorSurfaceNormals(model);
-            if(!validateMirrorDirections(normals[0])) throw new Error("mirror surface normal disagrees with game rules");
+            var doubleSided=key.indexOf("double_mirror_")===0;
+            if(!validateMirrorDirections(normals[0],doubleSided))
+              throw new Error("mirror surface normal disagrees with game rules");
           }
           uploadModel(key, model);
         }
@@ -465,7 +480,12 @@ function create(options){
         gl.uniformMatrix4fv(locations.mvp,false,new Float32Array(multiply(viewProjection,model)));
         parts.forEach(function(part){
           bindAttributes(part);
-          gl.uniform4fv(locations.color,new Float32Array(part.material.baseColorFactor));
+          var partColor=part.material.baseColorFactor.slice();
+          // Alpha > 1 is an internal shader flag. The shader restores output
+          // alpha to 1 and darkens normals that face away from the authored
+          // single-mirror reflective normal (+X,+Z).
+          if(part.singleMirrorFace) partColor[3]=2;
+          gl.uniform4fv(locations.color,new Float32Array(partColor));
           gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_SHORT, 0);
         });
       });

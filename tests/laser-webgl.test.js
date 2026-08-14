@@ -73,8 +73,29 @@ singleMirror.meshes.forEach(function(mesh){
 assert.deepEqual(GlbLoader.mirrorSurfaces(singleMirror),
   ["single_mirror_red_Mirror_Face"],
   "single mirror must expose only its authored front mirror face");
-assert.deepEqual(GlbLoader.mirrorSurfaceNormals(singleMirror), [[0,1]],
-  "single mirror metadata must expose its one reflective local normal");
+var singleNormal = GlbLoader.mirrorSurfaceNormals(singleMirror)[0];
+assert.ok(Math.abs(singleNormal[0] - Math.SQRT1_2) < 1e-5 &&
+  Math.abs(singleNormal[1] - Math.SQRT1_2) < 1e-5,
+  "single mirror must expose the diagonal normal of its hypotenuse face");
+
+var prismNode = singleMirror.nodes.filter(function(node){
+  return /_Triangular_Prism_Body$/.test(node.name);
+})[0];
+var prismPositions = singleMirror.meshes[prismNode.mesh].primitives[0].positions;
+var prismPoints = {};
+for(var prismI=0;prismI<prismPositions.length;prismI+=3){
+  prismPoints[prismPositions[prismI].toFixed(4)+","+prismPositions[prismI+2].toFixed(4)] = true;
+}
+var prismXZ = Object.keys(prismPoints).map(function(key){ return key.split(",").map(Number); });
+assert.equal(prismXZ.length, 3, "single mirror body must have a triangular cross-section");
+var sideSquares = [];
+for(var pa=0;pa<3;pa++) for(var pb=pa+1;pb<3;pb++){
+  var pdx=prismXZ[pa][0]-prismXZ[pb][0], pdz=prismXZ[pa][1]-prismXZ[pb][1];
+  sideSquares.push(pdx*pdx+pdz*pdz);
+}
+sideSquares.sort(function(a,b){ return a-b; });
+assert.ok(Math.abs(sideSquares[0]+sideSquares[1]-sideSquares[2]) < 1e-4,
+  "single mirror body must be a right triangular prism");
 
 var doubleMirror = GlbLoader.parseGlb(modelArrayBuffer("double_mirror_blue.glb"));
 assert.deepEqual(GlbLoader.mirrorSurfaces(doubleMirror), [
@@ -158,16 +179,21 @@ assert.deepEqual(zones.white, [
     type + " AI rotation must interpolate continuously between orientations");
 });
 assert.equal(WebGLRenderer.validateMirrorDirections(
-  GlbLoader.mirrorSurfaceNormals(singleMirror)[0]), true,
+  singleNormal), true,
   "authored mirror normals must agree with all existing reflection directions");
 assert.equal(WebGLRenderer.validateMirrorDirections([1,0]), false,
   "a mirror normal rotated away from the authored face must fail rule calibration");
+assert.equal(WebGLRenderer.validateMirrorDirections([-singleNormal[0],-singleNormal[1]]), false,
+  "the back of a single mirror must not be accepted as its reflective face");
+assert.equal(WebGLRenderer.orientationAngle("mirror",0), 0,
+  "the authored hypotenuse face must need no hidden 45-degree correction");
 
 function fakeGl(options){
   options = options || {};
   var bufferNumber = 0, shaderNumber = 0;
   var calls = {bufferData:0, drawElements:0, attrib:0, matrix:0, modelMatrices:[],
-    deletedBuffers:0, deletedPrograms:0, deletedShaders:0, depthMasks:[]};
+    deletedBuffers:0, deletedPrograms:0, deletedShaders:0, depthMasks:[],
+    shaderSources:[], colors:[]};
   var gl = {
     _calls:calls,
     VERTEX_SHADER:35633, FRAGMENT_SHADER:35632, COMPILE_STATUS:35713, LINK_STATUS:35714,
@@ -175,7 +201,7 @@ function fakeGl(options){
     FLOAT:5126, UNSIGNED_SHORT:5123, TRIANGLES:4,
     DEPTH_TEST:2929, BLEND:3042, SRC_ALPHA:770, ONE_MINUS_SRC_ALPHA:771,
     COLOR_BUFFER_BIT:16384, DEPTH_BUFFER_BIT:256,
-    createShader:function(){ shaderNumber++; return {number:shaderNumber}; }, shaderSource:function(){}, compileShader:function(){},
+    createShader:function(){ shaderNumber++; return {number:shaderNumber}; }, shaderSource:function(_,source){ calls.shaderSources.push(source); }, compileShader:function(){},
     getShaderParameter:function(shader){ return shader.number !== options.failShaderAt; }, getShaderInfoLog:function(){ return "test shader failure"; },
     deleteShader:function(){ calls.deletedShaders++; }, createProgram:function(){ return {}; }, attachShader:function(){},
     linkProgram:function(){}, getProgramParameter:function(){ return true; },
@@ -189,7 +215,7 @@ function fakeGl(options){
       calls.matrix++;
       if(location && location.name === "uModel") calls.modelMatrices.push(Array.prototype.slice.call(value));
     },
-    uniform4fv:function(){}, depthMask:function(value){ calls.depthMasks.push(value); },
+    uniform4fv:function(_,value){ calls.colors.push(Array.prototype.slice.call(value)); }, depthMask:function(value){ calls.depthMasks.push(value); },
     drawElements:function(){ calls.drawElements++; }
   };
   return gl;
@@ -210,6 +236,10 @@ var observedRenderer = WebGLRenderer.create({
 var loaded = false;
 observedRenderer.load(function(ok){ loaded = ok; });
 assert.equal(loaded, true, "all ten real GLBs must initialize the WebGL renderer");
+assert.ok(observedGl._calls.shaderSources.some(function(source){
+  return source.indexOf("vLocalNormal") >= 0 && source.indexOf("oneSided") >= 0 &&
+    source.indexOf("mirrorSide<.65") >= 0;
+}), "single-mirror shader must darken every face except the authored reflective side");
 assert.deepEqual(observedContextOptions, {alpha:true,antialias:true,preserveDrawingBuffer:true},
   "offscreen WebGL must preserve its frame for 2D canvas composition");
 observedRenderer.resize(640, 480, 1);
@@ -256,6 +286,14 @@ assert.ok(observedGl._calls.matrix > 0, "render must upload camera and model mat
 observedRenderer.render(renderScene);
 assert.equal(observedGl._calls.bufferData, uploadsAfterLoad,
   "repeated frames must reuse uploaded board and model buffers");
+
+observedGl._calls.colors.length = 0;
+observedRenderer.render({
+  pieces:[{type:"mirror",owner:0,row:4,col:4,orientation:0,alive:true}],
+  camera:renderScene.camera, selected:-1, targets:[], path:null, aiPose:null
+});
+assert.ok(observedGl._calls.colors.some(function(color){ return color[3]===2; }),
+  "the authored single-mirror face must be flagged for one-sided mirror shading");
 
 observedGl._calls.modelMatrices.length = 0;
 observedRenderer.render({

@@ -28,11 +28,11 @@ module.exports = {
     /* -------------------- 安全区域与布局 -------------------- */
     var SAFE_TOP = 52;
     var SAFE_BOT = 36;
-    var TOPBAR_H = 48;
-    var BTN_H = 44;
+    var TOPBAR_H = 62;
+    var BTN_H = 46;
     var BTN_GAP = 8;
-    var STATUS_H = 22;
-    var btnAreaH = BTN_H * 2 + BTN_GAP;
+    var STATUS_H = 34;
+    var btnAreaH = BTN_H + 12;
     var boardAreaTop = SAFE_TOP + TOPBAR_H;
     var boardAreaBot = SH - SAFE_BOT - btnAreaH - STATUS_H;
 
@@ -44,11 +44,14 @@ module.exports = {
     var LASER = "laser", KING = "king", SHIELD = "shield", MIRROR = "mirror", SWITCH = "switch";
     var PIECE_VAL = { king:10000, shield:3, switch:4, mirror:2, laser:0 };
     var AI_LEVELS = {
-      easy:   {attack:0.65, defense:1.25, guard:1.7, reply:0,    candidates:24, variety:5,   depth:1},
-      normal: {attack:2.0,  defense:0.9,  guard:0.8, reply:0.55, candidates:40, variety:1.5, depth:2},
-      hard:   {attack:1.2,  defense:1.2, guard:1.5, reply:1.0, candidates:40, variety:0.5, depth:3}
+      easy:   {attack:1.05, defense:1.10, guard:1.15, reply:0,    advance:0.55, initiative:1.10, passive:0.24, candidates:24, variety:3.0,  depth:1},
+      normal: {attack:2.35, defense:1.00, guard:0.90, reply:0.65, advance:0.90, initiative:1.60, passive:0.32, candidates:40, variety:1.0,  depth:2},
+      hard:   {attack:2.15, defense:1.20, guard:1.10, reply:1.0,  advance:1.10, initiative:2.00, passive:0.38, candidates:40, variety:0.25, depth:3}
     };
-    var MIRROR_MAP = [ {1:0,2:3}, {3:0,2:1}, {3:2,0:1}, {1:2,0:3} ];
+    // The authored GLB's visible mirror face points along its local +X,+Z
+    // normal. A ray can hit that face only while travelling against that
+    // outward normal; the opposite two approaches hit the dark back plate.
+    var MIRROR_MAP = [ {0:1,3:2}, {0:3,1:2}, {1:0,2:3}, {2:1,3:0} ];
     var SW_SLASH = {1:0,0:1,3:2,2:3};
     var SW_BACK  = {1:2,2:1,3:0,0:3};
     var LASER_DIRS = {0:[LEFT,UP], 1:[RIGHT,DOWN]};
@@ -68,7 +71,7 @@ module.exports = {
       cx: SW / 2,
       cy: (boardAreaTop + boardAreaBot) / 2
     };
-    cam.focal = Math.min(SW * 0.82, (boardAreaBot - boardAreaTop) * 1.3) * cam.dist / 10;
+    cam.focal = Math.min(SW * 0.72, (boardAreaBot - boardAreaTop) * 1.18) * cam.dist / 10;
 
     var camAnim = null;
     var pieceDrawPose = null;
@@ -253,7 +256,43 @@ module.exports = {
       }
       return Math.max(0, 12-minDist*3) + Math.min(sim.path.length, 14)*0.35 + turns*2 + enemyHalf*0.3;
     }
-    function evaluatePosition(pieces, player, difficulty){
+
+    function attackingPresence(pieces, player){
+      var king=findKing(pieces,1-player);
+      if(!king) return 30;
+      var score=0;
+      for(var i=0;i<pieces.length;i++){
+        var p=pieces[i];
+        if(!p.alive || p.owner!==player || p.type===KING || p.type===LASER) continue;
+        var dist=Math.abs(p.row-king.row)+Math.abs(p.col-king.col);
+        var tactical=p.type===SWITCH ? 1.2 : p.type===MIRROR ? 1.0 : 0.7;
+        score+=Math.max(0,10-dist)*0.18*tactical;
+        if((player===1 && p.row>=ROWS/2) || (player===0 && p.row<ROWS/2)) score+=0.55*tactical;
+      }
+      return score;
+    }
+
+    function initiativeBonus(before, after, player, action, cfg, passiveTurns){
+      var beforeThreat=laserPressure(before,player)+attackingPresence(before,player)*0.35;
+      var afterThreat=laserPressure(after,player)+attackingPresence(after,player)*0.35;
+      var scale=(cfg.initiative||0)*(1+Math.min(3,passiveTurns||0)*0.45);
+      var bonus=(afterThreat-beforeThreat)*scale;
+      if(action && action.kind==="skip") bonus-=scale*(1.8+Math.min(3,passiveTurns||0));
+      return bonus;
+    }
+
+    function passiveHumanTurn(before, after, player){
+      if(!Array.isArray(before) || !Array.isArray(after)) return false;
+      var opp=1-player, beforeOpp=0, afterOpp=0;
+      for(var i=0;i<before.length;i++) if(before[i].alive && before[i].owner===opp) beforeOpp++;
+      for(var j=0;j<after.length;j++) if(after[j].alive && after[j].owner===opp) afterOpp++;
+      if(afterOpp<beforeOpp) return false;
+      var beforeThreat=laserPressure(before,player)+attackingPresence(before,player)*0.35;
+      var afterThreat=laserPressure(after,player)+attackingPresence(after,player)*0.35;
+      return afterThreat<beforeThreat+0.75;
+    }
+
+    function evaluatePosition(pieces, player, difficulty, aggressionPlayer, passiveTurns){
       var cfg = AI_LEVELS[difficulty] || AI_LEVELS.normal;
       var opp = 1 - player;
       var score = 0;
@@ -264,8 +303,13 @@ module.exports = {
         score += (p.owner===player ? v : -v);
       }
       var myKing = findKing(pieces, player);
-      score += laserPressure(pieces, player) * cfg.attack;
-      score -= laserPressure(pieces, opp) * cfg.defense;
+      var passive=Math.min(3,Math.max(0,passiveTurns||0));
+      var myBoost=player===aggressionPlayer ? 1+passive*cfg.passive : 1;
+      var oppBoost=opp===aggressionPlayer ? 1+passive*cfg.passive : 1;
+      score += laserPressure(pieces, player) * cfg.attack * myBoost;
+      score -= laserPressure(pieces, opp) * cfg.defense * oppBoost;
+      score += attackingPresence(pieces,player) * cfg.advance * myBoost;
+      score -= attackingPresence(pieces,opp) * cfg.advance * 0.55 * oppBoost;
       if(myKing){
         var guards = 0;
         for(var j=0;j<pieces.length;j++){
@@ -280,7 +324,7 @@ module.exports = {
     /* -------------------- Alpha-Beta 搜索 -------------------- */
     var AB_CHILD_LIMIT = 30; // 非根节点候选上限（控制搜索复杂度）
 
-    function alphaBeta(pieces, depth, alpha, beta, player, difficulty){
+    function alphaBeta(pieces, depth, alpha, beta, player, difficulty, aggressionPlayer, passiveTurns){
       var opp = 1 - player;
       // 终局检测
       var myKing = findKing(pieces, player);
@@ -288,7 +332,7 @@ module.exports = {
       if(!myKing) return -100000 - depth;
       if(!oppKing) return 100000 + depth;
       if(depth === 0){
-        return evaluatePosition(pieces, player, difficulty);
+        return evaluatePosition(pieces, player, difficulty, aggressionPlayer, passiveTurns);
       }
       var acts = allActions(pieces, player);
       // 走法排序：快速评估用于提升剪枝效率
@@ -304,7 +348,7 @@ module.exports = {
             s = 100000 + depth; kingKill = true;
           }
         } else {
-          s = evaluatePosition(res.np, player, difficulty);
+          s = evaluatePosition(res.np, player, difficulty, aggressionPlayer, passiveTurns);
           if(res.eliminated){
             s += (res.eliminated.owner === player ? -PIECE_VAL[res.eliminated.type] : PIECE_VAL[res.eliminated.type]) * 4;
           }
@@ -321,22 +365,23 @@ module.exports = {
         if(c.kingKill){
           val = 100000 + depth;
         } else {
-          val = -alphaBeta(c.res.np, depth - 1, -beta, -alpha, opp, difficulty);
+          val = -alphaBeta(c.res.np, depth - 1, -beta, -alpha, opp, difficulty, aggressionPlayer, passiveTurns);
         }
         if(val > best) best = val;
         if(val > alpha) alpha = val;
         if(alpha >= beta) break;
       }
       if(best === -Infinity){
-        best = evaluatePosition(pieces, player, difficulty);
+        best = evaluatePosition(pieces, player, difficulty, aggressionPlayer, passiveTurns);
       }
       return best;
     }
 
-    function aiChoose(pieces, aiPlayer, difficulty){
+    function aiChoose(pieces, aiPlayer, difficulty, passiveTurns){
       difficulty = AI_LEVELS[difficulty] ? difficulty : "normal";
       var cfg = AI_LEVELS[difficulty];
       var opp = 1 - aiPlayer;
+      passiveTurns=Math.min(3,Math.max(0,passiveTurns||0));
       // easy: 保持原有 1-ply 随机逻辑
       if(difficulty === "easy"){
         var acts0 = allActions(pieces, aiPlayer);
@@ -352,7 +397,10 @@ module.exports = {
               s += (e.owner===aiPlayer ? -PIECE_VAL[e.type] : PIECE_VAL[e.type]) * 4;
             }
           }
-          if(!win && !suicide) s += evaluatePosition(res.np, aiPlayer, difficulty);
+          if(!win && !suicide){
+            s += evaluatePosition(res.np, aiPlayer, difficulty, aiPlayer, passiveTurns);
+            s += initiativeBonus(pieces,res.np,aiPlayer,a,cfg,passiveTurns);
+          }
           return { a:a, s:s, win:win, suicide:suicide };
         });
         var wins0 = scored0.filter(function(x){ return x.win; });
@@ -381,7 +429,8 @@ module.exports = {
             s = 100000 + depth; kingKill = true;
           }
         } else {
-          s = evaluatePosition(res.np, aiPlayer, difficulty);
+          s = evaluatePosition(res.np, aiPlayer, difficulty, aiPlayer, passiveTurns);
+          s += initiativeBonus(pieces,res.np,aiPlayer,a,cfg,passiveTurns);
           if(res.eliminated){
             s += (res.eliminated.owner === aiPlayer ? -PIECE_VAL[res.eliminated.type] : PIECE_VAL[res.eliminated.type]) * 4;
           }
@@ -399,7 +448,7 @@ module.exports = {
         if(c.kingKill){
           val = 100000 + depth;
         } else if(depth > 1){
-          val = -alphaBeta(c.res.np, depth - 1, -beta, -alpha, opp, difficulty);
+          val = -alphaBeta(c.res.np, depth - 1, -beta, -alpha, opp, difficulty, aiPlayer, passiveTurns);
         } else {
           val = c.s;
         }
@@ -431,55 +480,55 @@ module.exports = {
     /* -------------------- 5种官方布局（Khet 2.0官方非对称阵型） -------------------- */
     var LAYOUTS = [
       {name:"幺点", en:"ACE", desc:"入门阵型，简单均衡",
-       p0:[[LASER,7,9,UP],[SHIELD,7,5,LEFT],[KING,7,4,RIGHT],[SHIELD,7,3,LEFT],
+       p0:[[LASER,7,9,UP],[SHIELD,7,5,UP],[KING,7,4,RIGHT],[SHIELD,7,3,UP],
            [MIRROR,7,2,UP],[MIRROR,6,7,RIGHT],[MIRROR,4,9,LEFT],
            [SWITCH,4,5,RIGHT],[SWITCH,4,4,DOWN],[MIRROR,4,2,UP],
            [MIRROR,3,9,UP],[MIRROR,3,2,LEFT],[MIRROR,2,3,UP]],
        p1:[[MIRROR,5,6,DOWN],[MIRROR,4,7,RIGHT],[MIRROR,4,0,DOWN],
            [MIRROR,3,7,DOWN],[SWITCH,3,5,DOWN],[SWITCH,3,4,RIGHT],
            [MIRROR,3,0,RIGHT],[MIRROR,1,2,LEFT],[MIRROR,0,7,DOWN],
-           [SHIELD,0,6,RIGHT],[KING,0,5,RIGHT],[SHIELD,0,4,RIGHT],
+           [SHIELD,0,6,DOWN],[KING,0,5,RIGHT],[SHIELD,0,4,DOWN],
            [LASER,0,0,DOWN]]},
       {name:"好奇", en:"CURIOSITY", desc:"镜面前推，开局更具进攻性",
-       p0:[[LASER,7,9,UP],[SHIELD,7,5,LEFT],[KING,7,4,RIGHT],[SHIELD,7,3,LEFT],
+       p0:[[LASER,7,9,UP],[SHIELD,7,5,UP],[KING,7,4,RIGHT],[SHIELD,7,3,UP],
            [SWITCH,7,2,DOWN],[MIRROR,5,3,LEFT],[MIRROR,4,9,LEFT],
            [SWITCH,4,4,DOWN],[MIRROR,4,1,UP],[MIRROR,3,9,UP],
            [MIRROR,3,4,DOWN],[MIRROR,3,1,LEFT],[MIRROR,2,3,UP]],
        p1:[[MIRROR,5,6,DOWN],[MIRROR,4,8,RIGHT],[MIRROR,4,5,UP],
            [MIRROR,4,0,DOWN],[MIRROR,3,8,DOWN],[SWITCH,3,5,DOWN],
            [MIRROR,3,0,RIGHT],[MIRROR,2,6,RIGHT],[SWITCH,0,7,DOWN],
-           [SHIELD,0,6,RIGHT],[KING,0,5,RIGHT],[SHIELD,0,4,RIGHT],
+           [SHIELD,0,6,DOWN],[KING,0,5,RIGHT],[SHIELD,0,4,DOWN],
            [LASER,0,0,DOWN]]},
       {name:"圣杯", en:"GRAIL", desc:"国王重兵把守，防御坚固",
-       p0:[[LASER,7,9,UP],[MIRROR,7,5,RIGHT],[SHIELD,7,4,LEFT],[MIRROR,7,3,UP],
+       p0:[[LASER,7,9,UP],[MIRROR,7,5,RIGHT],[SHIELD,7,4,UP],[MIRROR,7,3,UP],
            [KING,6,4,RIGHT],[MIRROR,5,9,LEFT],[MIRROR,5,5,RIGHT],
-           [SHIELD,5,4,LEFT],[SWITCH,5,3,DOWN],[MIRROR,4,9,UP],
+           [SHIELD,5,4,UP],[SWITCH,5,3,DOWN],[MIRROR,4,9,UP],
            [SWITCH,4,7,RIGHT],[MIRROR,3,6,DOWN],[MIRROR,3,4,UP]],
        p1:[[MIRROR,4,5,DOWN],[MIRROR,4,3,UP],[SWITCH,3,2,RIGHT],
-           [MIRROR,3,0,DOWN],[SWITCH,2,6,DOWN],[SHIELD,2,5,RIGHT],
+           [MIRROR,3,0,DOWN],[SWITCH,2,6,DOWN],[SHIELD,2,5,DOWN],
            [MIRROR,2,4,LEFT],[MIRROR,2,0,RIGHT],[KING,1,5,RIGHT],
-           [MIRROR,0,6,DOWN],[SHIELD,0,5,RIGHT],[MIRROR,0,4,LEFT],
+           [MIRROR,0,6,DOWN],[SHIELD,0,5,DOWN],[MIRROR,0,4,LEFT],
            [LASER,0,0,DOWN]]},
       {name:"水星", en:"MERCURY", desc:"镜链复杂，反射路径多变",
        p0:[[LASER,7,9,UP],[MIRROR,7,5,RIGHT],[KING,7,4,RIGHT],[MIRROR,7,3,UP],
-           [SHIELD,6,4,LEFT],[MIRROR,6,3,UP],[MIRROR,5,9,UP],
-           [SWITCH,5,6,DOWN],[SHIELD,5,4,LEFT],[MIRROR,4,9,LEFT],
+           [SHIELD,6,4,UP],[MIRROR,6,3,UP],[MIRROR,5,9,UP],
+           [SWITCH,5,6,DOWN],[SHIELD,5,4,UP],[MIRROR,4,9,LEFT],
            [MIRROR,3,8,LEFT],[MIRROR,3,4,UP],[SWITCH,0,9,DOWN]],
        p1:[[SWITCH,7,0,DOWN],[MIRROR,4,5,DOWN],[MIRROR,4,1,RIGHT],
-           [MIRROR,3,0,RIGHT],[SHIELD,2,5,RIGHT],[SWITCH,2,3,DOWN],
-           [MIRROR,2,0,DOWN],[MIRROR,1,6,DOWN],[SHIELD,1,5,RIGHT],
+           [MIRROR,3,0,RIGHT],[SHIELD,2,5,DOWN],[SWITCH,2,3,DOWN],
+           [MIRROR,2,0,DOWN],[MIRROR,1,6,DOWN],[SHIELD,1,5,DOWN],
            [MIRROR,0,6,DOWN],[KING,0,5,RIGHT],[MIRROR,0,4,LEFT],
            [LASER,0,0,DOWN]]},
       {name:"苏菲", en:"SOPHIE", desc:"棋子分散全盘，高阶对弈",
        p0:[[LASER,7,9,UP],[KING,7,5,RIGHT],[MIRROR,7,3,UP],
-           [SHIELD,6,6,LEFT],[SHIELD,6,4,DOWN],[MIRROR,5,9,LEFT],
+           [SHIELD,6,6,UP],[SHIELD,6,4,UP],[MIRROR,5,9,LEFT],
            [MIRROR,5,5,RIGHT],[MIRROR,5,4,UP],[SWITCH,4,2,RIGHT],
            [MIRROR,2,9,UP],[SWITCH,2,7,DOWN],[MIRROR,1,9,LEFT],
            [MIRROR,0,5,UP]],
        p1:[[MIRROR,7,4,DOWN],[MIRROR,6,0,RIGHT],[SWITCH,5,2,DOWN],
            [MIRROR,5,0,DOWN],[SWITCH,3,7,RIGHT],[MIRROR,2,5,DOWN],
-           [MIRROR,2,4,LEFT],[MIRROR,2,0,RIGHT],[SHIELD,1,5,UP],
-           [SHIELD,1,3,RIGHT],[MIRROR,0,6,DOWN],[KING,0,4,RIGHT],
+           [MIRROR,2,4,LEFT],[MIRROR,2,0,RIGHT],[SHIELD,1,5,DOWN],
+           [SHIELD,1,3,DOWN],[MIRROR,0,6,DOWN],[KING,0,4,RIGHT],
            [LASER,0,0,DOWN]]},
     ];
 
@@ -499,6 +548,11 @@ module.exports = {
     /* -------------------- 游戏状态 -------------------- */
     var DIFFICULTY_ORDER = ["easy", "normal", "hard"];
     var DIFFICULTY_LABEL = {easy:"简单", normal:"普通", hard:"困难"};
+    var DIFFICULTY_DESC = {
+      easy:"主动推进并尝试简单攻击，仍会保留容错空间",
+      normal:"主动构建反射路线，并预判玩家下一步回应",
+      hard:"持续施压并推演多回合，优先形成致命光路"
+    };
     var G = {
       pieces:[], current:0, phase:"select", sel:-1, mode:"pve", aiPlayer:1,
       difficulty:"normal", screen:"setup", lockedLayoutIdx:null, lockedDifficulty:null,
@@ -506,7 +560,8 @@ module.exports = {
       path:null, animT:0, beamPulseT:0, over:false, winner:-1, busy:false,
       history:{}, drawOffer:false, modal:null, flashN:0, flashPiece:null,
       eliminated:null, layoutIdx:0, undoSnapshot:null,
-      particles:[], particleT:0
+      particles:[], particleT:0, dropdownOpen:false, diffDropdownOpen:false,
+      playerPassiveTurns:0, turnStartPieces:null
     };
 
     /* -------------------- WebGL 棋盘（失败时保留现有伪3D） -------------------- */
@@ -556,11 +611,14 @@ module.exports = {
     }
 
     function webglCamera(){
+      var cos=Math.abs(Math.cos(cam.yaw)), sin=Math.abs(Math.sin(cam.yaw));
+      var halfWidth=cos*5.65+sin*4.65;
+      var matchDistance=Math.max(26,26*halfWidth/5.65);
       return {
         yaw:cam.yaw,
         pitch:cam.pitch,
-        distance:G.screen === "setup" ? 27 : 22,
-        offsetY:G.screen === "setup" ? -90 : -27
+        distance:G.screen === "setup" ? 27 : matchDistance,
+        offsetY:G.screen === "setup" ? -90 : (boardAreaTop+boardAreaBot-SH)/2-7
       };
     }
 
@@ -594,6 +652,8 @@ module.exports = {
       G.over=false; G.winner=-1; G.busy=false;
       G.history={}; G.drawOffer=false; G.modal=null;
       G.undoSnapshot=null;
+      G.playerPassiveTurns=0;
+      G.turnStartPieces=G.pieces.map(copySnapshotValue);
     }
 
     function setSetupCamera(){
@@ -620,7 +680,15 @@ module.exports = {
       camAnim = null;
       cam.yaw = DEFAULT_YAW; cam.pitch = DEFAULT_PITCH;
       cam.cx = SW / 2; cam.cy = (boardAreaTop + boardAreaBot) / 2;
-      cam.focal = Math.min(SW * 0.82, (boardAreaBot - boardAreaTop) * 1.3) * cam.dist / 10;
+      updateMatchCameraFit();
+    }
+
+    function updateMatchCameraFit(){
+      var cos=Math.abs(Math.cos(cam.yaw)), sin=Math.abs(Math.sin(cam.yaw));
+      var halfWidth=cos*5.65+sin*4.65;
+      var base=Math.min(SW*.72,(boardAreaBot-boardAreaTop)*1.18)*cam.dist/10;
+      cam.cx=SW/2; cam.cy=(boardAreaTop+boardAreaBot)/2;
+      cam.focal=base*Math.min(1,5.65/halfWidth);
     }
 
     function enterSetup(){
@@ -628,15 +696,20 @@ module.exports = {
       G.screen = "setup";
       G.lockedLayoutIdx = null;
       G.lockedDifficulty = null;
+      G.dropdownOpen = false;
+      G.diffDropdownOpen = false;
       G.pieces = makeInitialPieces(G.layoutIdx);
       G.current=0; G.phase="select"; G.over=false; G.winner=-1;
       G.history={}; G.drawOffer=false; G.modal=null; G.busy=false;
+      G.playerPassiveTurns=0; G.turnStartPieces=null;
       setSetupCamera();
       render();
     }
 
     function beginMatch(){
       if(G.screen !== "setup") return;
+      G.dropdownOpen = false;
+      G.diffDropdownOpen = false;
       G.lockedLayoutIdx = G.layoutIdx;
       G.lockedDifficulty = G.difficulty;
       G.screen = "playing";
@@ -1960,7 +2033,9 @@ module.exports = {
     /* -------------------- 按钮系统 -------------------- */
     var BUTTONS = [];
     var ONBOARD = [];
-    function addBtn(label, fn, style){ BUTTONS.push({label:label, fn:fn, style:style||""}); }
+    function addBtn(label, fn, style, weight){
+      BUTTONS.push({label:label, fn:fn, style:style||"", weight:Math.max(0.5,weight||1)});
+    }
     function layoutButtons(){
       var areaY = SH - SAFE_BOT - btnAreaH;
       var rows = [], row = [];
@@ -1973,9 +2048,11 @@ module.exports = {
       for(var r=0;r<rows.length;r++){
         var n = rows[r].length;
         var totalW = SW - 24;
-        var bw = (totalW - BTN_GAP*(n-1)) / n;
+        var usableW = totalW - BTN_GAP*(n-1), totalWeight = 0;
+        for(var wi=0;wi<n;wi++) totalWeight += rows[r][wi].weight || 1;
         var x = 12;
         for(var c=0;c<n;c++){
+          var bw = usableW * (rows[r][c].weight || 1) / totalWeight;
           rows[r][c].x = x; rows[r][c].y = y; rows[r][c].w = bw; rows[r][c].h = BTN_H;
           x += bw + BTN_GAP;
         }
@@ -1994,6 +2071,54 @@ module.exports = {
       if(b.style === "primary"){ fill = "#3da9fc"; stroke = "#3da9fc"; txt = "#06101f"; }
       if(b.style === "danger"){ fill = "#ff5a6e"; stroke = "#ff5a6e"; txt = "#2a0610"; }
       if(b.style === "ghost"){ fill = "rgba(34,43,72,0.6)"; }
+      if(b.style === "turnEnd"){ fill = "rgba(245,216,110,0.12)"; stroke = "#f5d86e"; txt = "#f5d86e"; }
+      if(b.style === "matchPrimary"){
+        var actionBeam=ctx.createLinearGradient(b.x,b.y,b.x+b.w,b.y);
+        actionBeam.addColorStop(0,"#e9f0ed");actionBeam.addColorStop(.72,"#dce9ea");actionBeam.addColorStop(1,"#bdeaff");
+        ctx.fillStyle=actionBeam;ctx.beginPath();
+        ctx.moveTo(b.x,b.y);ctx.lineTo(b.x+b.w-10,b.y);ctx.lineTo(b.x+b.w,b.y+10);
+        ctx.lineTo(b.x+b.w,b.y+b.h);ctx.lineTo(b.x+10,b.y+b.h);ctx.lineTo(b.x,b.y+b.h-10);ctx.closePath();ctx.fill();
+        ctx.strokeStyle="#f8ffff";ctx.lineWidth=1;ctx.stroke();
+        ctx.fillStyle=ownerColor(G.current,true);ctx.fillRect(b.x,b.y,3,b.h);
+        ctx.fillStyle="#0b151b";ctx.font="700 14px 'PingFang SC', sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";
+        ctx.fillText(b.label,b.x+b.w/2,b.y+b.h/2+1);
+        return;
+      }
+      if(b.style === "matchGhost" || b.style === "matchTurnEnd"){
+        ctx.fillStyle=b.style === "matchTurnEnd" ? "rgba(245,216,110,.10)" : "rgba(16,27,34,.92)";
+        ctx.fillRect(b.x,b.y,b.w,b.h);
+        ctx.strokeStyle=b.style === "matchTurnEnd" ? "#f5d86e" : "#415761";
+        ctx.lineWidth=1;ctx.strokeRect(b.x+.5,b.y+.5,b.w-1,b.h-1);
+        ctx.fillStyle=b.style === "matchTurnEnd" ? "#f5d86e" : "#b9c7ca";
+        ctx.font="600 13px 'PingFang SC', sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";
+        ctx.fillText(b.label,b.x+b.w/2,b.y+b.h/2+1);
+        return;
+      }
+      if(b.style === "setupGhost"){
+        ctx.fillStyle = "rgba(15,23,28,0.94)";
+        ctx.fillRect(b.x, b.y, b.w, b.h);
+        ctx.strokeStyle = "#52666f"; ctx.lineWidth = 1; ctx.strokeRect(b.x+0.5,b.y+0.5,b.w-1,b.h-1);
+        ctx.fillStyle = "#b7c3c8"; ctx.font = "600 12px 'PingFang SC', sans-serif";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(b.label, b.x+b.w/2, b.y+b.h/2+1);
+        return;
+      }
+      if(b.style === "setupPrimary"){
+        var cut = 11;
+        var beam = ctx.createLinearGradient(b.x, b.y, b.x+b.w, b.y);
+        beam.addColorStop(0, "#dce7e9"); beam.addColorStop(0.72, "#eef4f3"); beam.addColorStop(1, "#b8e8fb");
+        ctx.fillStyle = beam; ctx.beginPath();
+        ctx.moveTo(b.x,b.y);ctx.lineTo(b.x+b.w-cut,b.y);ctx.lineTo(b.x+b.w,b.y+cut);
+        ctx.lineTo(b.x+b.w,b.y+b.h);ctx.lineTo(b.x+cut,b.y+b.h);ctx.lineTo(b.x,b.y+b.h-cut);ctx.closePath();ctx.fill();
+        ctx.strokeStyle = "#f7ffff";ctx.lineWidth = 1;ctx.stroke();
+        ctx.fillStyle = "#ff4d45";ctx.fillRect(b.x,b.y,3,b.h);
+        ctx.fillStyle = "#55727e";ctx.font = "600 7px 'Arial Narrow', sans-serif";ctx.textAlign="left";ctx.textBaseline="middle";
+        ctx.fillText(b.meta||"CALIBRATED",b.x+14,b.y+13);
+        ctx.fillStyle = "#0d1519";ctx.font = "700 13px 'PingFang SC', sans-serif";ctx.textBaseline="middle";
+        ctx.fillText(b.label,b.x+14,b.y+30);
+        ctx.strokeStyle="#147daf";ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(b.x+b.w-19,b.y+b.h/2-4);ctx.lineTo(b.x+b.w-14,b.y+b.h/2);ctx.lineTo(b.x+b.w-19,b.y+b.h/2+4);ctx.stroke();
+        return;
+      }
       ctx.fillStyle = fill;
       roundRect(b.x, b.y, b.w, b.h, 10); ctx.fill();
       ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke();
@@ -2063,6 +2188,7 @@ module.exports = {
           return;
         }
 
+        updateMatchCameraFit();
         drawBackground3D();
         drawTopBar();
         var webglDrawn = drawWebGLBoard();
@@ -2079,6 +2205,7 @@ module.exports = {
           ctx.textAlign = "center"; ctx.textBaseline = "top";
           ctx.fillText(G.actionNotice, SW/2, boardAreaTop + 4);
         }
+        drawMatchBoardFrame();
         buildOnBoardButtons3D();
         drawOnBoardButtons3D();
         drawStatus();
@@ -2093,150 +2220,230 @@ module.exports = {
       }
     }
 
-    function renderSetup(){
-      drawBackground3D();
-      var leftGlow = ctx.createRadialGradient(0, SH * 0.3, 0, 0, SH * 0.3, SW * 0.72);
-      leftGlow.addColorStop(0, "rgba(255,65,75,0.16)");
-      leftGlow.addColorStop(1, "rgba(255,65,75,0)");
-      ctx.fillStyle = leftGlow; ctx.fillRect(0, 0, SW, SH);
-      var rightGlow = ctx.createRadialGradient(SW, SH * 0.3, 0, SW, SH * 0.3, SW * 0.72);
-      rightGlow.addColorStop(0, "rgba(61,169,252,0.16)");
-      rightGlow.addColorStop(1, "rgba(61,169,252,0)");
-      ctx.fillStyle = rightGlow; ctx.fillRect(0, 0, SW, SH);
+    var SETUP_LAYOUT_HITS = [];
+    var SETUP_DIFF_HITS = [];
 
-      ctx.fillStyle = "#f4f7ff";
-      ctx.font = "700 23px sans-serif";
-      ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.fillText("激光镭射象棋", SW/2, SAFE_TOP + 17);
-      ctx.fillStyle = "#6bc1ff";
-      ctx.font = "700 12px sans-serif";
-      ctx.fillText("战术部署", SW/2, SAFE_TOP + 42);
+    function drawSetupBackground(){
+      var bg = ctx.createLinearGradient(0, 0, 0, SH);
+      bg.addColorStop(0, "#11151b");
+      bg.addColorStop(0.48, "#0d1117");
+      bg.addColorStop(1, "#090c10");
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, SW, SH);
 
-      if(!drawWebGLBoard()){
-        drawBoard3D();
-        drawPieces3D();
-        if(rendererMode === "loading"){
-          ctx.fillStyle = "rgba(10,14,26,0.72)";
-          ctx.fillRect(0, boardAreaTop, SW, 28);
-          ctx.fillStyle = "#c5ccdc";
-          ctx.font = "12px sans-serif";
-          ctx.textAlign = "center"; ctx.textBaseline = "middle";
-          ctx.fillText("正在加载 3D 棋盘…", SW/2, boardAreaTop + 14);
-        }
-      }
-
-      var L = LAYOUTS[G.layoutIdx];
-      var setupY = Math.round(SH * 0.55) + 1;
-      ctx.fillStyle = "#e8ecf5";
-      ctx.font = "700 14px sans-serif";
-      ctx.fillText(L.name + " · " + L.en, SW/2, setupY);
-      ctx.fillStyle = "#9aa3bd";
-      ctx.font = "12px sans-serif";
-      ctx.fillText(L.desc, SW/2, setupY + 17);
-      ctx.fillStyle = "#e8ecf5";
-      ctx.font = "700 13px sans-serif";
-      ctx.fillText("选择阵型", SW/2, setupY + 39);
-      ctx.fillText("选择难度", SW/2, setupY + 122);
-
-      buildSetupButtons(setupY);
-      for(var i=0;i<BUTTONS.length;i++) drawButton(BUTTONS[i]);
+      ctx.save();
+      ctx.strokeStyle = "rgba(174,197,209,0.055)"; ctx.lineWidth = 1;
+      for(var gx=16;gx<SW;gx+=24){ ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,SH);ctx.stroke(); }
+      for(var gy=SAFE_TOP;gy<SH;gy+=24){ ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(SW,gy);ctx.stroke(); }
+      ctx.restore();
     }
 
-    function buildSetupButtons(setupY){
-      var gap = 6, margin = 12, i, row, count, x, w;
-      for(i=0;i<LAYOUTS.length;i++){
-        row = i < 3 ? 0 : 1;
-        count = row === 0 ? 3 : 2;
-        w = (SW - margin*2 - gap*(count-1)) / count;
-        x = margin + (i - (row === 0 ? 0 : 3)) * (w + gap);
-        BUTTONS.push({
-          x:x, y:setupY + 47 + row*34, w:w, h:28,
-          label:LAYOUTS[i].name,
-          fn:(function(idx){ return function(){ selectLayout(idx); }; })(i),
-          style:i === G.layoutIdx ? "primary" : "ghost"
-        });
+    function drawSetupHeader(){
+      ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      ctx.fillStyle = "#a9c6d3"; ctx.font = "600 9px 'Arial Narrow', sans-serif";
+      ctx.fillText("OPTICAL ARRAY / PRE-MATCH CALIBRATION", 16, SAFE_TOP + 8);
+      ctx.fillStyle = "#f2eee5"; ctx.font = "800 24px 'PingFang SC', sans-serif";
+      ctx.fillText("激光镭射象棋", 16, SAFE_TOP + 36);
+      ctx.fillStyle = "#8998a1"; ctx.font = "11px 'PingFang SC', sans-serif";
+      ctx.fillText("校准阵型与对手强度", 16, SAFE_TOP + 54);
+
+      var railY = SAFE_TOP + 65, mid = SW * 0.58;
+      var rail = ctx.createLinearGradient(16, railY, SW - 16, railY);
+      rail.addColorStop(0, "#ff4d45"); rail.addColorStop(0.48, "#ff4d45");
+      rail.addColorStop(0.52, "#62c8ff"); rail.addColorStop(1, "#62c8ff");
+      ctx.strokeStyle = rail; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(16,railY); ctx.lineTo(SW-16,railY); ctx.stroke();
+      ctx.fillStyle = "#f2eee5"; ctx.beginPath();
+      ctx.moveTo(mid,railY-5);ctx.lineTo(mid+5,railY);ctx.lineTo(mid,railY+5);ctx.lineTo(mid-5,railY);ctx.closePath();ctx.fill();
+      ctx.fillStyle = "#ff766f";ctx.font = "600 8px 'Arial Narrow', sans-serif";ctx.fillText("RED",16,railY-5);
+      ctx.fillStyle = "#77d3ff";ctx.textAlign = "right";ctx.fillText("BLUE",SW-16,railY-5);
+    }
+
+    function drawPreviewFrame(setupY){
+      var x=10, y=SAFE_TOP+75, w=SW-20, h=setupY-y-10;
+      ctx.fillStyle = "rgba(12,18,23,0.64)"; roundRect(x,y,w,h,8);ctx.fill();
+      ctx.strokeStyle = "rgba(124,159,174,0.46)";ctx.lineWidth=1;ctx.stroke();
+      ctx.strokeStyle = "#dce5e7";ctx.lineWidth=1.5;
+      var c=12;
+      ctx.beginPath();ctx.moveTo(x,y+c);ctx.lineTo(x,y);ctx.lineTo(x+c,y);
+      ctx.moveTo(x+w-c,y);ctx.lineTo(x+w,y);ctx.lineTo(x+w,y+c);
+      ctx.moveTo(x,y+h-c);ctx.lineTo(x,y+h);ctx.lineTo(x+c,y+h);
+      ctx.moveTo(x+w-c,y+h);ctx.lineTo(x+w,y+h);ctx.lineTo(x+w,y+h-c);ctx.stroke();
+      ctx.fillStyle="rgba(8,12,16,0.78)";ctx.fillRect(x+1,y+1,112,18);
+      ctx.fillStyle="#a9c6d3";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.textAlign="left";ctx.textBaseline="middle";
+      ctx.fillText("LIVE FORMATION",x+8,y+10);
+      ctx.fillStyle="#77d3ff";ctx.textAlign="right";ctx.fillText("BLUE VIEW",x+w-8,y+10);
+    }
+
+    function drawFormationRail(setupY){
+      SETUP_LAYOUT_HITS = [];
+      var L=LAYOUTS[G.layoutIdx], x0=24, x1=SW-24, railY=setupY+63;
+      ctx.textAlign="left";ctx.textBaseline="alphabetic";
+      ctx.fillStyle="#f2eee5";ctx.font="700 14px 'PingFang SC', sans-serif";
+      ctx.fillText(L.name+" · "+L.en,16,setupY+14);
+      ctx.fillStyle="#8998a1";ctx.font="10px 'PingFang SC', sans-serif";ctx.fillText(L.desc,16,setupY+30);
+      ctx.fillStyle="#f2eee5";ctx.font="600 10px 'PingFang SC', sans-serif";ctx.fillText("选择阵型",16,setupY+48);
+      ctx.fillStyle="#6f828b";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.fillText("FORMATION",70,setupY+48);
+      ctx.textAlign="right";ctx.fillStyle="#66747d";ctx.fillText((G.layoutIdx+1)+" / "+LAYOUTS.length,SW-16,setupY+48);
+
+      var beam=ctx.createLinearGradient(x0,railY,x1,railY);
+      beam.addColorStop(0,"#ff4d45");beam.addColorStop(1,"#62c8ff");
+      ctx.strokeStyle="rgba(125,151,163,0.44)";ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(x0,railY);ctx.lineTo(x1,railY);ctx.stroke();
+      ctx.strokeStyle=beam;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x0,railY);ctx.lineTo(x1,railY);ctx.stroke();
+      for(var i=0;i<LAYOUTS.length;i++){
+        var px=x0+(x1-x0)*i/(LAYOUTS.length-1), active=i===G.layoutIdx;
+        SETUP_LAYOUT_HITS.push({x:px-28,y:railY-20,w:56,h:43,index:i});
+        ctx.fillStyle=active?"#f5d86e":"#152027";ctx.strokeStyle=active?"#fff1ad":"#78909b";ctx.lineWidth=active?2:1;
+        ctx.beginPath();
+        if(active){ctx.moveTo(px,railY-7);ctx.lineTo(px+7,railY);ctx.lineTo(px,railY+7);ctx.lineTo(px-7,railY);ctx.closePath();}
+        else ctx.arc(px,railY,3.5,0,6.283);
+        ctx.fill();ctx.stroke();
+        ctx.fillStyle=active?"#f2eee5":"#82919a";ctx.font=(active?"700 ":"500 ")+"10px 'PingFang SC', sans-serif";ctx.textAlign="center";ctx.textBaseline="top";
+        ctx.fillText(LAYOUTS[i].name,px,railY+11);
       }
-      gap = 8;
-      w = (SW - margin*2 - gap*2) / 3;
-      for(i=0;i<DIFFICULTY_ORDER.length;i++){
-        var level = DIFFICULTY_ORDER[i];
-        BUTTONS.push({
-          x:margin + i*(w+gap), y:setupY + 131, w:w, h:30,
-          label:DIFFICULTY_LABEL[level],
-          fn:(function(value){ return function(){ selectDifficulty(value); }; })(level),
-          style:level === G.difficulty ? "primary" : "ghost"
-        });
+    }
+
+    function drawDifficultySelector(setupY){
+      SETUP_DIFF_HITS = [];
+      var top=setupY+94, margin=16, gap=4, w=(SW-margin*2-gap*2)/3, h=34;
+      ctx.fillStyle="#f2eee5";ctx.font="600 10px 'PingFang SC', sans-serif";ctx.textAlign="left";ctx.textBaseline="alphabetic";
+      ctx.fillText("选择难度",margin,top);
+      ctx.fillStyle="#6f828b";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.fillText("COMPUTER",70,top);
+      ctx.fillStyle="#66747d";ctx.textAlign="right";ctx.fillText("开局后锁定",SW-margin,top);
+      for(var i=0;i<DIFFICULTY_ORDER.length;i++){
+        var level=DIFFICULTY_ORDER[i], x=margin+i*(w+gap), y=top+9, active=level===G.difficulty;
+        SETUP_DIFF_HITS.push({x:x,y:y,w:w,h:h,level:level});
+        ctx.fillStyle=active?"#dce7e9":"rgba(19,29,35,0.88)";ctx.fillRect(x,y,w,h);
+        ctx.strokeStyle=active?"#f2eee5":"#344750";ctx.lineWidth=1;ctx.strokeRect(x+.5,y+.5,w-1,h-1);
+        ctx.fillStyle=active?"#0d1519":"#91a0a8";ctx.font=(active?"700 ":"500 ")+"12px 'PingFang SC', sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";
+        ctx.fillText(DIFFICULTY_LABEL[level],x+w/2,y+h/2+1);
+        if(active){ctx.fillStyle=level==="hard"?"#ff4d45":"#39aeea";ctx.fillRect(x,y,w,2);}
       }
-      var actionY = Math.min(setupY + 176, SH - SAFE_BOT - 42);
-      w = (SW - margin*2 - gap) / 2;
-      BUTTONS.push({x:margin, y:actionY, w:w, h:42,
-        label:"规则介绍", fn:openRules, style:"ghost"});
-      BUTTONS.push({x:margin+w+gap, y:actionY, w:w, h:42,
-        label:"开始游戏", fn:beginMatch, style:"primary"});
+      ctx.fillStyle="#84939b";ctx.font="10px 'PingFang SC', sans-serif";ctx.textAlign="left";ctx.textBaseline="alphabetic";
+      ctx.fillText(DIFFICULTY_DESC[G.difficulty],margin,top+58);
+    }
+
+    function renderSetup(){
+      var setupY=Math.round(SH*0.55)+1;
+      drawSetupBackground();
+      drawSetupHeader();
+      drawPreviewFrame(setupY);
+      if(!drawWebGLBoard()){
+        drawBoard3D();drawPieces3D();
+        if(rendererMode==="loading"){
+          ctx.fillStyle="rgba(8,12,16,0.82)";ctx.fillRect(12,boardAreaTop,SW-24,24);
+          ctx.fillStyle="#a9c6d3";ctx.font="10px 'PingFang SC', sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";
+          ctx.fillText("正在校准 3D 阵型…",SW/2,boardAreaTop+12);
+        }
+      }
+      drawFormationRail(setupY);
+      drawDifficultySelector(setupY);
+      var actionY=Math.min(setupY+199,SH-SAFE_BOT-48);
+      buildSetupButtons(actionY);
+      for(var i=0;i<BUTTONS.length;i++)drawButton(BUTTONS[i]);
+    }
+
+    function buildSetupButtons(actionY){
+      var margin=16,gap=8,rulesW=104,startW=SW-margin*2-gap-rulesW;
+      BUTTONS.push({x:margin,y:actionY,w:rulesW,h:46,label:"规则介绍",fn:openRules,style:"setupGhost"});
+      BUTTONS.push({x:margin+rulesW+gap,y:actionY,w:startW,h:46,label:"开始游戏",meta:"CALIBRATION COMPLETE",fn:beginMatch,style:"setupPrimary"});
+    }
+
+    function handleDropdownClick(x,y){
+      if(G.screen!=="setup")return false;
+      for(var i=0;i<SETUP_LAYOUT_HITS.length;i++){
+        var a=SETUP_LAYOUT_HITS[i];
+        if(x>=a.x&&x<=a.x+a.w&&y>=a.y&&y<=a.y+a.h){selectLayout(a.index);return true;}
+      }
+      for(var j=0;j<SETUP_DIFF_HITS.length;j++){
+        var d=SETUP_DIFF_HITS[j];
+        if(x>=d.x&&x<=d.x+d.w&&y>=d.y&&y<=d.y+d.h){selectDifficulty(d.level);return true;}
+      }
+      return false;
     }
 
     function drawBackground3D(){
       var g = ctx.createLinearGradient(0, 0, 0, SH);
-      g.addColorStop(0, "#0d1224");
-      g.addColorStop(0.5, "#11172e");
-      g.addColorStop(1, "#0a0e1a");
+      g.addColorStop(0, "#111820");
+      g.addColorStop(0.52, "#0c1218");
+      g.addColorStop(1, "#090e13");
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, SW, SH);
+      ctx.save();
+      ctx.strokeStyle="rgba(174,197,209,.045)";ctx.lineWidth=1;
+      for(var gx=16;gx<SW;gx+=24){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,SH);ctx.stroke();}
+      for(var gy=SAFE_TOP;gy<SH;gy+=24){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(SW,gy);ctx.stroke();}
+      ctx.restore();
     }
 
     function drawTopBar(){
-      var turnTxt = G.over ? "对局结束" : (G.current===0 ? "红方回合" : "蓝方回合");
+      var turnTxt = G.over ? "对局结束" : (G.current===0 ? "红方行动" : "蓝方行动");
       var col = G.over ? "#9aa3bd" : ownerColor(G.current, true);
-      ctx.fillStyle = "#e8ecf5";
-      ctx.font = "700 17px sans-serif";
-      ctx.textAlign = "left"; ctx.textBaseline = "middle";
-      ctx.fillText("\u26A1 激光镭射象棋", 12, SAFE_TOP + TOPBAR_H/2);
-      var tw = ctx.measureText(turnTxt).width;
-      var pw = tw + 24, ph = 28;
-      var px = SW - pw - 12, py = SAFE_TOP + (TOPBAR_H - ph)/2;
-      ctx.fillStyle = "#1a2138";
-      roundRect(px, py, pw, ph, 14); ctx.fill();
-      ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.stroke();
-      ctx.fillStyle = col;
-      ctx.font = "700 13px sans-serif";
-      ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.fillText(turnTxt, px + pw/2, py + ph/2 + 1);
+      var x=14,y=SAFE_TOP+5,w=SW-28;
+      ctx.fillStyle="rgba(12,20,26,.90)";ctx.fillRect(x,y,w,TOPBAR_H-10);
+      ctx.strokeStyle="rgba(113,145,157,.42)";ctx.lineWidth=1;ctx.strokeRect(x+.5,y+.5,w-1,TOPBAR_H-11);
+      ctx.fillStyle="#76909a";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.textAlign="left";ctx.textBaseline="alphabetic";
+      ctx.fillText("OPTICAL MATCH / LIVE ARRAY",x+10,y+12);
+      ctx.fillStyle=col;ctx.font="800 18px 'PingFang SC', sans-serif";ctx.fillText(turnTxt,x+10,y+35);
+      ctx.fillStyle="#71868f";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.textAlign="right";
+      ctx.fillText((G.lockedDifficulty ? DIFFICULTY_LABEL[G.lockedDifficulty] : "")+"电脑 · 10 × 8",x+w-10,y+13);
+      ctx.fillStyle="#aebdc1";ctx.font="500 10px 'PingFang SC', sans-serif";ctx.fillText(G.busy?"正在计算光路":"拖动棋盘可旋转视角",x+w-10,y+34);
+      var railY=y+TOPBAR_H-15,mid=SW/2;
+      var rail=ctx.createLinearGradient(x+10,railY,x+w-10,railY);
+      rail.addColorStop(0,"#ff514a");rail.addColorStop(.48,"#ff514a");rail.addColorStop(.52,"#5ccbff");rail.addColorStop(1,"#5ccbff");
+      ctx.strokeStyle=rail;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x+10,railY);ctx.lineTo(x+w-10,railY);ctx.stroke();
+      var markerX=G.current===0?x+w*.27:x+w*.73;
+      ctx.fillStyle=G.over?"#9aa3bd":"#e9f0ed";ctx.beginPath();ctx.moveTo(markerX,railY-5);ctx.lineTo(markerX+5,railY);ctx.lineTo(markerX,railY+5);ctx.lineTo(markerX-5,railY);ctx.closePath();ctx.fill();
+      ctx.fillStyle="#ff7771";ctx.font="600 7px 'Arial Narrow', sans-serif";ctx.textAlign="left";ctx.fillText("RED",x+10,railY-4);
+      ctx.fillStyle="#78d7ff";ctx.textAlign="right";ctx.fillText("BLUE",x+w-10,railY-4);
+    }
+
+    function drawMatchBoardFrame(){
+      var x=10,y=boardAreaTop+8,w=SW-20,h=boardAreaBot-boardAreaTop-16,c=12;
+      ctx.strokeStyle="rgba(207,224,227,.72)";ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(x,y+c);ctx.lineTo(x,y);ctx.lineTo(x+c,y);
+      ctx.moveTo(x+w-c,y);ctx.lineTo(x+w,y);ctx.lineTo(x+w,y+c);
+      ctx.moveTo(x,y+h-c);ctx.lineTo(x,y+h);ctx.lineTo(x+c,y+h);
+      ctx.moveTo(x+w-c,y+h);ctx.lineTo(x+w,y+h);ctx.lineTo(x+w,y+h-c);ctx.stroke();
+      ctx.fillStyle="rgba(9,14,19,.78)";ctx.fillRect(x+1,y+1,110,17);ctx.fillRect(x+w-92,y+1,91,17);
+      ctx.fillStyle="#9eb2b9";ctx.font="600 7px 'Arial Narrow', sans-serif";ctx.textAlign="left";ctx.textBaseline="middle";
+      ctx.fillText("TACTICAL FIELD / 10×8",x+7,y+9);
+      ctx.fillStyle="#77d3ff";ctx.textAlign="right";ctx.fillText("BLUE ARRAY",x+w-7,y+9);
     }
 
     function drawStatus(){
-      var y = SH - SAFE_BOT - btnAreaH - STATUS_H + 4;
-      ctx.fillStyle = "#9aa3bd";
-      ctx.font = "13px sans-serif";
-      ctx.textAlign = "center"; ctx.textBaseline = "top";
+      var y = SH - SAFE_BOT - btnAreaH - STATUS_H;
       var txt = "";
-      if(G.over) txt = "对局结束 — 点击再来一局";
-      else if(G.busy) txt = "电脑思考中…";
-      else if(G.phase==="select") txt = (G.mode==="pve" && G.current===G.aiPlayer) ? "" : "选择己方棋子，或直接发射 · 双指旋转视角";
-      else if(G.phase==="move") txt = "点击高亮格移动 · 点旋转按钮旋转 · 双指拖动旋转视角";
-      else if(G.phase==="fire") txt = "准备发射激光 · 双指可旋转视角";
-      ctx.fillText(txt, SW/2, y);
+      var phaseLabel="READY";
+      if(G.over){txt="本局已结束";phaseLabel="COMPLETE";}
+      else if(G.busy){txt="电脑正在计算光路…";phaseLabel="COMPUTE";}
+      else if(G.phase==="select"){txt=(G.mode==="pve"&&G.current===G.aiPlayer)?"":"选择棋子，或直接发射";phaseLabel="SELECT";}
+      else if(G.phase==="move"){txt="移动到高亮格；棋子上方可旋转";phaseLabel="MOVE";}
+      else if(G.phase==="fire"){txt="发射激光，或结束本回合";phaseLabel="FIRE";}
+      ctx.fillStyle="rgba(14,23,29,.94)";ctx.fillRect(12,y+3,SW-24,STATUS_H-6);
+      ctx.strokeStyle="#31444d";ctx.lineWidth=1;ctx.strokeRect(12.5,y+3.5,SW-25,STATUS_H-7);
+      ctx.fillStyle=G.busy?"#f5d86e":ownerColor(G.current,true);ctx.fillRect(12,y+3,3,STATUS_H-6);
+      ctx.fillStyle="#708790";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.textAlign="left";ctx.textBaseline="middle";ctx.fillText(phaseLabel,23,y+STATUS_H/2);
+      ctx.fillStyle="#b9c7ca";ctx.font="500 11px 'PingFang SC', sans-serif";ctx.textAlign="right";ctx.fillText(txt,SW-22,y+STATUS_H/2);
     }
 
     /* -------------------- 按钮构建 -------------------- */
     function buildActionButtons(){
       if(G.screen !== "playing" || G.over || G.busy) return;
       if(G.phase === "move"){
-        addBtn("取消", function(){ G.phase="select"; G.sel=-1; render(); });
-        addBtn("重置视角", resetView, "ghost");
+        addBtn("取消选择", function(){ G.phase="select"; G.sel=-1; render(); }, "matchGhost", 1.15);
+        addBtn("视角归位", resetView, "matchGhost", 0.85);
       }
       else if(G.phase === "fire"){
-        addBtn("\u26A1 发射", fireLaser, "primary");
-        addBtn("跳过", skipFire);
-        addBtn("撤销", undoAction);
-        if(G.drawOffer) addBtn("平局", declareDraw);
+        addBtn("\u26A1 发射激光", fireLaser, "matchPrimary", 1.35);
+        addBtn("回合结束", skipFire, "matchTurnEnd", 1.1);
+        addBtn("撤销操作", undoAction, "matchGhost", 0.9);
+        if(G.drawOffer) addBtn("接受平局", declareDraw, "matchGhost", 0.8);
       }
       else if(G.phase === "select" && !G.busy){
         if(!(G.mode==="pve" && G.current===G.aiPlayer)){
-          addBtn("\u26A1 直接发射", directFire, "primary");
+          addBtn("\u26A1 直接发射", directFire, "matchPrimary", 1.5);
         }
-        addBtn("重开", restartMatch, "danger");
-        addBtn("返回设置", requestReturnToSetup, "ghost");
-        addBtn("重置视角", resetView, "ghost");
+        addBtn("视角归位", resetView, "matchGhost", 0.85);
       }
     }
 
@@ -2348,7 +2555,13 @@ module.exports = {
       _setTrackTimeout(function(){ G.path = null; endTurn(); }, 480);
     }
     function endTurn(){
+      if(G.mode === "pve" && G.current !== G.aiPlayer){
+        if(passiveHumanTurn(G.turnStartPieces,G.pieces,G.current))
+          G.playerPassiveTurns=Math.min(3,G.playerPassiveTurns+1);
+        else G.playerPassiveTurns=0;
+      }
       G.current = 1 - G.current; G.sel = -1; G.phase = "select"; G.busy = false; G.undoSnapshot = null;
+      G.turnStartPieces=G.pieces.map(copySnapshotValue);
       render();
       if(G.mode === "pve" && G.current === G.aiPlayer && !G.over) _setTrackTimeout(aiTurn, 360);
     }
@@ -2359,7 +2572,7 @@ module.exports = {
       G.busy = true; render();
       _setTrackTimeout(function(){
         var act;
-        try { act = aiChoose(G.pieces, G.aiPlayer, G.lockedDifficulty); }
+        try { act = aiChoose(G.pieces, G.aiPlayer, G.lockedDifficulty, G.playerPassiveTurns); }
         catch(e) { G.busy = false; endTurn(); return; }
         applyAiAction(act);
       }, 420);
@@ -2811,6 +3024,7 @@ module.exports = {
     }
 
     function processClick(x, y){
+      if(handleDropdownClick(x, y)) return;
       var btn = hitButton(x, y);
       if(btn && btn.fn){ btn.fn(); return; }
       if(G.modal || G.screen !== "playing") return;
@@ -2887,14 +3101,18 @@ module.exports = {
         requestReturnToSetup();
         return true;
       },
+      showBack: function(){
+        return G.screen === "playing";
+      },
       cameraControl: function(dx, dy){ externalCameraControl(dx, dy); },
       _debugAI: {
-        choose: function(pieces, player, level){ return aiChoose(pieces, player, level); },
+        choose: function(pieces, player, level, passiveTurns){ return aiChoose(pieces, player, level, passiveTurns); },
         config: function(level){ return Object.assign({}, AI_LEVELS[level] || AI_LEVELS.normal); },
         actions: function(pieces, player){ return generateActions(pieces, player); },
         resolve: function(pieces, player, action){ return resolveTurn(pieces, player, action); },
         initialPieces: function(layoutIndex){ return makeInitialPieces(layoutIndex); },
-        getDifficulty: function(){ return G.difficulty; }
+        getDifficulty: function(){ return G.difficulty; },
+        passiveTurn: function(before,after,player){ return passiveHumanTurn(before,after,player); }
       },
       _debugGame: {
         snapshot: function(){
@@ -2904,9 +3122,10 @@ module.exports = {
             rulesScroll:G.rulesScroll, modal:G.modal, busy:G.busy, actionNotice:G.actionNotice,
             current:G.current, phase:G.phase, sel:G.sel, mode:G.mode, aiPlayer:G.aiPlayer,
             animT:G.animT, over:G.over, winner:G.winner, drawOffer:G.drawOffer,
-            flashN:G.flashN, particleT:G.particleT,
+            flashN:G.flashN, particleT:G.particleT, playerPassiveTurns:G.playerPassiveTurns,
             rendererMode:rendererMode,
             camera:{yaw:cam.yaw, pitch:cam.pitch},
+            webglCamera:webglCamera(),
             pieces:G.pieces.map(copySnapshotValue),
             aiAnim:copySnapshotValue(G.aiAnim)
           };

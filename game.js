@@ -49,8 +49,8 @@ function returnToMenu() {
   if (currentModule && currentModule.exit) {
     try { currentModule.exit(); } catch (e) { console.error("[合集] exit error:", e); }
   }
-  currentModule = Menu.create(ctx, W, H, switchToGame);
-  isInMenu = true;
+  currentModule = createLaserGame();
+  isInMenu = false;
 }
 
 function switchToGame(key) {
@@ -80,8 +80,9 @@ function switchToGame(key) {
   }
 }
 
-// 初始化菜单
-currentModule = Menu.create(ctx, W, H, switchToGame);
+// 初始化 - 直接进入激光镭射象棋
+currentModule = createLaserGame();
+isInMenu = false;
 
 // ==================== 触摸分发 ====================
 function getTouchPos(e) {
@@ -95,7 +96,9 @@ function getTouchPos(e) {
 }
 
 function hitBackBtn(x, y) {
-  return !isInMenu && x >= BACK_BTN.x && x <= BACK_BTN.x + BACK_BTN.w &&
+  if (isInMenu) return false;
+  if (currentModule && currentModule.showBack && !currentModule.showBack()) return false;
+  return x >= BACK_BTN.x && x <= BACK_BTN.x + BACK_BTN.w &&
     y >= BACK_BTN.y && y <= BACK_BTN.y + BACK_BTN.h;
 }
 
@@ -138,6 +141,7 @@ if (wx.onTouchCancel) {
 // ==================== 返回按钮绘制 ====================
 function drawBackButton() {
   if (isInMenu) return;
+  if (currentModule && currentModule.showBack && !currentModule.showBack()) return;
   var b = BACK_BTN;
   ctx.fillStyle = "rgba(0,0,0,0.55)";
   ctx.beginPath();
