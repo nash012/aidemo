@@ -1,6 +1,8 @@
 "use strict";
 
 var assert = require("node:assert");
+var fs = require("node:fs");
+var path = require("node:path");
 var LaserGame = require("../games/laser/laser-game.js");
 
 function fakeContext(){
@@ -8,11 +10,13 @@ function fakeContext(){
   var texts = [];
   var arcs = [];
   var strokes = [];
+  var drawImages = [];
   return new Proxy({
-    _texts:texts, _arcs:arcs, _strokes:strokes,
+    _texts:texts, _arcs:arcs, _strokes:strokes, _drawImages:drawImages,
     fillText:function(text){ texts.push(text); },
     arc:function(x, y, radius){ arcs.push({radius:radius, strokeStyle:this.strokeStyle}); },
     stroke:function(){ strokes.push({strokeStyle:this.strokeStyle, lineWidth:this.lineWidth}); },
+    drawImage:function(source){ drawImages.push(source); },
     measureText:function(s){ return {width:String(s).length * 8}; },
     createLinearGradient:function(){ return gradient; },
     createRadialGradient:function(){ return gradient; }
@@ -20,6 +24,29 @@ function fakeContext(){
     get:function(target, key){ return key in target ? target[key] : function(){}; },
     set:function(target, key, value){ target[key] = value; return true; }
   });
+}
+
+function fakeWebGL(){
+  var calls = {draws:0, deletedPrograms:0};
+  return {
+    _calls:calls,
+    VERTEX_SHADER:35633, FRAGMENT_SHADER:35632, COMPILE_STATUS:35713, LINK_STATUS:35714,
+    ARRAY_BUFFER:34962, ELEMENT_ARRAY_BUFFER:34963, STATIC_DRAW:35044,
+    FLOAT:5126, UNSIGNED_SHORT:5123, TRIANGLES:4,
+    DEPTH_TEST:2929, BLEND:3042, SRC_ALPHA:770, ONE_MINUS_SRC_ALPHA:771,
+    COLOR_BUFFER_BIT:16384, DEPTH_BUFFER_BIT:256,
+    createShader:function(){ return {}; }, shaderSource:function(){}, compileShader:function(){},
+    getShaderParameter:function(){ return true; }, getShaderInfoLog:function(){ return ""; },
+    deleteShader:function(){}, createProgram:function(){ return {}; }, attachShader:function(){},
+    linkProgram:function(){}, getProgramParameter:function(){ return true; }, getProgramInfoLog:function(){ return ""; },
+    enable:function(){}, blendFunc:function(){}, createBuffer:function(){ return {}; }, bindBuffer:function(){},
+    bufferData:function(){}, deleteBuffer:function(){}, deleteProgram:function(){ calls.deletedPrograms++; },
+    viewport:function(){}, clearColor:function(){}, clear:function(){}, useProgram:function(){},
+    getAttribLocation:function(_,name){ return name === "aPosition" ? 0 : 1; },
+    getUniformLocation:function(_,name){ return {name:name}; }, enableVertexAttribArray:function(){},
+    vertexAttribPointer:function(){}, uniformMatrix4fv:function(){}, uniform4fv:function(){},
+    drawElements:function(){ calls.draws++; }
+  };
 }
 
 function piece(id, type, owner, row, col, orientation){
@@ -594,6 +621,86 @@ try {
   Math.random = savedRandom;
   game.exit();
 }
+
+var webglCtx = fakeContext();
+var webgl = fakeWebGL();
+var offscreen = {width:0,height:0,getContext:function(type){ return type === "webgl" ? webgl : null; }};
+var webglGame = LaserGame.create(webglCtx, 375, 667, function(){}, {
+  createCanvas:function(){ return offscreen; },
+  readAsset:function(assetPath, done){
+    var data = fs.readFileSync(path.join(__dirname, "..", assetPath));
+    done(null, data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
+  },
+  dpr:1
+});
+webglGame.render();
+assert.ok(webglCtx._drawImages.indexOf(offscreen) >= 0,
+  "a ready WebGL board must be composited into the existing 2D game UI");
+assert.ok(webgl._calls.draws > 0,
+  "the integrated setup preview must render real GLB geometry");
+assert.equal(webglGame._debugGame.snapshot().rendererMode, "ready",
+  "the game state debug surface must expose the active renderer mode");
+webglGame._debugGame.beginMatch();
+var webglPiecePoint = require("../games/laser/webgl-renderer.js")
+  .projectCell(7, 4, 375, 667, {yaw:0,pitch:0.95,distance:22,offsetY:-27});
+touch(webglGame, {clientX:webglPiecePoint.x, clientY:webglPiecePoint.y});
+assert.ok(webglGame._debugGame.snapshot().sel >= 0,
+  "touching a projected red GLB piece must select its real board cell");
+webglGame.exit();
+assert.equal(webgl._calls.deletedPrograms, 1,
+  "exiting the laser module must dispose the WebGL program exactly once");
+
+var fallbackCtx = fakeContext();
+var fallbackGame = LaserGame.create(fallbackCtx, 375, 667, function(){}, {
+  createCanvas:function(){ return {getContext:function(){ return null; }}; },
+  readAsset:function(){ throw new Error("assets must not load without WebGL"); },
+  dpr:1
+});
+fallbackGame.render();
+assert.equal(fallbackGame._debugGame.snapshot().rendererMode, "fallback",
+  "missing WebGL must select the existing pseudo-3D renderer");
+assert.equal(fallbackCtx._drawImages.length, 0,
+  "fallback mode must not composite an unusable offscreen canvas");
+fallbackGame.exit();
+
+var pendingReads = [];
+var lateGl = fakeWebGL();
+var lateCtx = fakeContext();
+var lateGame = LaserGame.create(lateCtx, 375, 667, function(){}, {
+  createCanvas:function(){ return {width:0,height:0,getContext:function(){ return lateGl; }}; },
+  readAsset:function(assetPath, done){ pendingReads.push({path:assetPath, done:done}); },
+  dpr:1
+});
+assert.equal(lateGame._debugGame.snapshot().rendererMode, "loading",
+  "asynchronous model reads must expose loading state");
+lateGame.exit();
+pendingReads.forEach(function(read){
+  var data = fs.readFileSync(path.join(__dirname, "..", read.path));
+  read.done(null, data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
+});
+lateGame.render();
+assert.equal(lateGame._debugGame.snapshot().rendererMode, "loading",
+  "late model callbacks after exit must not revive the WebGL renderer");
+assert.equal(lateCtx._drawImages.length, 0,
+  "late model callbacks after exit must not composite a disposed canvas");
+
+var compositeCtx = fakeContext();
+compositeCtx.drawImage = function(){ throw new Error("test composite failure"); };
+var compositeGl = fakeWebGL();
+var compositeGame = LaserGame.create(compositeCtx, 375, 667, function(){}, {
+  createCanvas:function(){ return {width:0,height:0,getContext:function(){ return compositeGl; }}; },
+  readAsset:function(assetPath, done){
+    var data = fs.readFileSync(path.join(__dirname, "..", assetPath));
+    done(null, data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
+  },
+  dpr:1
+});
+compositeGame.render();
+assert.equal(compositeGame._debugGame.snapshot().rendererMode, "fallback",
+  "2D composition failure must permanently switch the module to pseudo-3D");
+assert.equal(compositeGl._calls.deletedPrograms, 1,
+  "composition failure must dispose WebGL resources once");
+compositeGame.exit();
 
 var savedWx = global.wx;
 var savedRequestAnimationFrame = global.requestAnimationFrame;

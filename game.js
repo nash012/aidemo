@@ -27,6 +27,24 @@ var isInMenu = true;
 // 返回按钮区域（左上角）
 var BACK_BTN = { x: 10, y: 10, w: 78, h: 34 };
 
+function createLaserGame() {
+  var L = require("./games/laser/laser-game.js");
+  return L.create(ctx, W, H, returnToMenu, {
+    createCanvas: function(){ return wx.createCanvas(); },
+    readAsset: function(assetPath, done){
+      try {
+        var fs = wx.getFileSystemManager();
+        fs.readFile({
+          filePath: assetPath,
+          success: function(result){ done(null, result.data); },
+          fail: function(error){ done(error || new Error("模型读取失败")); }
+        });
+      } catch (error) { done(error); }
+    },
+    dpr: DPR
+  });
+}
+
 function returnToMenu() {
   if (currentModule && currentModule.exit) {
     try { currentModule.exit(); } catch (e) { console.error("[合集] exit error:", e); }

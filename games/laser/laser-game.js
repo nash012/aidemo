@@ -4,8 +4,10 @@
 // 棋盘 10×8，每方13枚棋子，5种官方阵型
 // 手指拖动调整视角，游戏居中，安全区域适配
 // ============================================================
+var WebGLRenderer = require("./webgl-renderer.js");
+
 module.exports = {
-  create: function(ctx, W, H, returnToMenu) {
+  create: function(ctx, W, H, returnToMenu, platform) {
     "use strict";
 
     /* -------------------- 屏幕别名 -------------------- */
@@ -506,6 +508,75 @@ module.exports = {
       eliminated:null, layoutIdx:0, undoSnapshot:null,
       particles:[], particleT:0
     };
+
+    /* -------------------- WebGL 棋盘（失败时保留现有伪3D） -------------------- */
+    var webglCanvas = null;
+    var webglRenderer = null;
+    var rendererMode = "fallback";
+    var rendererAlive = true;
+
+    function initWebGLRenderer(){
+      if(!platform || typeof platform.createCanvas !== "function" ||
+         typeof platform.readAsset !== "function") return;
+      try {
+        webglCanvas = platform.createCanvas();
+        webglRenderer = WebGLRenderer.create({
+          canvas:webglCanvas,
+          readAsset:platform.readAsset
+        });
+        webglRenderer.resize(SW, SH, platform.dpr || 1);
+        rendererMode = "loading";
+        webglRenderer.load(function(ok){
+          if(!rendererAlive) return;
+          rendererMode = ok ? "ready" : "fallback";
+          try { render(); } catch(e) {}
+        });
+      } catch(e){
+        rendererMode = "fallback";
+        if(webglRenderer) webglRenderer.dispose();
+        webglRenderer = null; webglCanvas = null;
+      }
+    }
+
+    function webglScene(){
+      var targets = [];
+      if(G.phase === "move" && G.sel >= 0 && G.pieces[G.sel])
+        targets = moveTargets(G.pieces[G.sel]);
+      return {
+        pieces:G.pieces.map(copySnapshotValue),
+        selected:G.sel,
+        targets:targets.map(copySnapshotValue),
+        path:G.path ? G.path.map(copySnapshotValue) : null,
+        beamProgress:G.animT,
+        aiPose:copySnapshotValue(sampleAiAnimation(G.aiAnim)),
+        camera:webglCamera(),
+        setup:G.screen === "setup",
+        zoneCells:WebGLRenderer.zoneCells()
+      };
+    }
+
+    function webglCamera(){
+      return {
+        yaw:cam.yaw,
+        pitch:cam.pitch,
+        distance:G.screen === "setup" ? 27 : 22,
+        offsetY:G.screen === "setup" ? -90 : -27
+      };
+    }
+
+    function drawWebGLBoard(){
+      if(rendererMode !== "ready" || !webglRenderer || !webglCanvas) return false;
+      try {
+        if(!webglRenderer.render(webglScene())) throw new Error("WebGL render failed");
+        ctx.drawImage(webglCanvas, 0, 0, SW, SH);
+        return true;
+      } catch(e){
+        rendererMode = "fallback";
+        webglRenderer.dispose();
+        webglRenderer = null; webglCanvas = null;
+        return false;
+      }
+    }
 
     function clearMatchVisualState(){
       G.path=null; G.animT=0; G.beamPulseT=0; G.sel=-1;
@@ -1994,12 +2065,20 @@ module.exports = {
 
         drawBackground3D();
         drawTopBar();
-        drawBoard3D();
-        drawPieces3D();
-        drawAiActionOverlay();
-        if(G.flashN > 0 && G.flashPiece) drawFlash3D();
-        if(G.particles && G.particles.length > 0) drawParticles3D();
-        if(G.path && G.path.length > 1) drawBeam3D();
+        var webglDrawn = drawWebGLBoard();
+        if(!webglDrawn){
+          drawBoard3D();
+          drawPieces3D();
+          drawAiActionOverlay();
+          if(G.flashN > 0 && G.flashPiece) drawFlash3D();
+          if(G.particles && G.particles.length > 0) drawParticles3D();
+          if(G.path && G.path.length > 1) drawBeam3D();
+        } else if(G.actionNotice){
+          ctx.fillStyle = "#ffe14d";
+          ctx.font = "700 14px sans-serif";
+          ctx.textAlign = "center"; ctx.textBaseline = "top";
+          ctx.fillText(G.actionNotice, SW/2, boardAreaTop + 4);
+        }
         buildOnBoardButtons3D();
         drawOnBoardButtons3D();
         drawStatus();
@@ -2033,8 +2112,18 @@ module.exports = {
       ctx.font = "700 12px sans-serif";
       ctx.fillText("战术部署", SW/2, SAFE_TOP + 42);
 
-      drawBoard3D();
-      drawPieces3D();
+      if(!drawWebGLBoard()){
+        drawBoard3D();
+        drawPieces3D();
+        if(rendererMode === "loading"){
+          ctx.fillStyle = "rgba(10,14,26,0.72)";
+          ctx.fillRect(0, boardAreaTop, SW, 28);
+          ctx.fillStyle = "#c5ccdc";
+          ctx.font = "12px sans-serif";
+          ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText("正在加载 3D 棋盘…", SW/2, boardAreaTop + 14);
+        }
+      }
 
       var L = LAYOUTS[G.layoutIdx];
       var setupY = Math.round(SH * 0.55) + 1;
@@ -2559,6 +2648,13 @@ module.exports = {
     var DRAG_THRESHOLD = 15; // 单指移动超过此距离判定为拖动视角
 
     function screenToCell(sx, sy){
+      if(rendererMode === "ready" && webglRenderer){
+        try { return webglRenderer.pick(sx, sy, webglCamera()); }
+        catch(e){
+          rendererMode = "fallback";
+          webglRenderer.dispose(); webglRenderer = null; webglCanvas = null;
+        }
+      }
       var bestR = -1, bestC = -1, bestDist = Infinity, bestS = 1;
       for(var r=0;r<ROWS;r++){
         for(var c=0;c<COLS;c++){
@@ -2761,6 +2857,7 @@ module.exports = {
 
     /* -------------------- 启动 -------------------- */
     enterSetup();
+    initWebGLRenderer();
 
     /* -------------------- 模块接口 -------------------- */
     return {
@@ -2808,6 +2905,7 @@ module.exports = {
             current:G.current, phase:G.phase, sel:G.sel, mode:G.mode, aiPlayer:G.aiPlayer,
             animT:G.animT, over:G.over, winner:G.winner, drawOffer:G.drawOffer,
             flashN:G.flashN, particleT:G.particleT,
+            rendererMode:rendererMode,
             camera:{yaw:cam.yaw, pitch:cam.pitch},
             pieces:G.pieces.map(copySnapshotValue),
             aiAnim:copySnapshotValue(G.aiAnim)
@@ -2833,6 +2931,9 @@ module.exports = {
         }; }
       },
       exit: function(){
+        rendererAlive = false;
+        if(webglRenderer) webglRenderer.dispose();
+        webglRenderer = null; webglCanvas = null;
         clearMatchVisualState();
       }
     };
