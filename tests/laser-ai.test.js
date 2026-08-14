@@ -5,6 +5,10 @@ var fs = require("node:fs");
 var path = require("node:path");
 var LaserGame = require("../games/laser/laser-game.js");
 var WebGLRenderer = require("../games/laser/webgl-renderer.js");
+var LaserConstants = require("../games/laser/config/constants.js");
+var LaserFormations = require("../games/laser/config/formations.js");
+var LaserRules = require("../games/laser/core/rules.js");
+var LaserAI = require("../games/laser/core/ai.js");
 
 function fakeContext(){
   var gradient = { addColorStop:function(){} };
@@ -96,6 +100,22 @@ function testAiAnimation(action, beforeSeconds, advanceSeconds, expected){
 var game = LaserGame.create(fakeContext(), 375, 667, function(){});
 assert.ok(game._debugAI, "AI debug surface must exist");
 
+assert.equal(typeof LaserGame.create, "function",
+  "the stable laser-game entry must keep exporting create()");
+assert.equal(LaserFormations.FORMATIONS.length, 5,
+  "formation configuration must expose all five official layouts");
+assert.deepEqual(LaserFormations.makeInitialPieces(0), game._debugAI.initialPieces(0),
+  "the controller must consume the shared formation module");
+assert.equal(LaserRules.isZoneAllowed(7, 0, 0), false,
+  "red pieces must not enter the blue reserved zone");
+assert.equal(LaserRules.isZoneAllowed(0, 9, 1), false,
+  "blue pieces must not enter the red reserved zone");
+assert.equal(LaserRules.laserHit(piece("m", LaserConstants.PIECE.MIRROR, 0, 3, 3, 0),
+  LaserConstants.DIRECTION.RIGHT), LaserConstants.DIRECTION.UP,
+  "the pure rules module must own single-mirror reflection behavior");
+assert.equal(typeof LaserAI.choose, "function");
+assert.equal(typeof LaserAI.passiveTurn, "function");
+
 assert.ok(game._debugGame, "game-state debug surface must exist");
 
 assert.ok(game._debugEffects.beamTurns, "beam effects debug surface must exist");
@@ -178,7 +198,7 @@ assert.equal(initial.layoutIdx, 0);
 assert.equal(initial.difficulty, "normal");
 assert.deepEqual(initial.pieces, game._debugAI.initialPieces(0));
 assert.deepEqual(initial.camera, {
-  yaw:0, pitch:1.08
+  yaw:0,pitch:1.08,zoom:1
 }, "setup must expose its fixed shallow camera");
 initial.pieces[0].row = -1;
 assert.deepEqual(game._debugGame.snapshot().pieces, game._debugAI.initialPieces(0),
@@ -250,18 +270,77 @@ cameraGame.onTouchEnd({touches:[], changedTouches:[{clientX:150, clientY:130}]})
 assert.notDeepEqual(cameraGame._debugGame.snapshot().camera, matchCamera,
   "single-finger camera drag must remain active during play");
 matchCamera = cameraGame._debugGame.snapshot().camera;
+var pinchDistanceBefore=cameraGame._debugGame.snapshot().webglCamera.distance;
 cameraGame.onTouchStart({touches:[
   {clientX:100, clientY:100}, {clientX:200, clientY:100}
 ]});
 cameraGame.onTouchMove({touches:[
-  {clientX:80, clientY:120}, {clientX:220, clientY:120}
+  {clientX:80, clientY:100}, {clientX:220, clientY:100}
 ]});
 cameraGame.onTouchEnd({touches:[], changedTouches:[
-  {clientX:80, clientY:120}, {clientX:220, clientY:120}
+  {clientX:80, clientY:100}, {clientX:220, clientY:100}
 ]});
 assert.notDeepEqual(cameraGame._debugGame.snapshot().camera, matchCamera,
   "two-finger camera gestures must remain active during play");
+assert.ok(cameraGame._debugGame.snapshot().camera.zoom>matchCamera.zoom,
+  "spreading two fingers must zoom the board in instead of changing only pitch");
+assert.ok(cameraGame._debugGame.snapshot().webglCamera.distance<pinchDistanceBefore,
+  "pinch zoom must move the WebGL camera closer to the board");
 cameraGame.exit();
+
+var controlCtx=fakeContext(),controlGame=LaserGame.create(controlCtx,375,667,function(){});
+controlGame._debugGame.beginMatch();
+var shieldCenter=controlGame._debugEffects.projectBoardPoint(7,5,.273);
+assert.equal(controlGame._debugEffects.hitPiece(shieldCenter.x+22,shieldCenter.y,0),1,
+  "a forgiving visual hit area must recognize taps near the body of a piece");
+touch(controlGame,{clientX:shieldCenter.x+22,clientY:shieldCenter.y});
+var controlState=controlGame._debugGame.snapshot();
+assert.equal(controlState.sel,1,"the enlarged piece hit area must select the intended piece");
+assert.equal(controlState.phase,"move");
+var controls=controlGame._debugEffects.snapshot();
+assert.ok(controls.controlDock && controls.onboard.length===2,
+  "a selected non-laser piece must show one paired rotation dock");
+assert.deepEqual(controls.onboard.map(function(button){return button.label;}),["左转","右转"]);
+controlGame._debugEffects.moveTargets(1).forEach(function(target){
+  var point=controlGame._debugEffects.projectBoardPoint(target.r,target.c,.05),dock=controls.controlDock;
+  assert.ok(!(point.x>=dock.x && point.x<=dock.x+dock.w && point.y>=dock.y && point.y<=dock.y+dock.h),
+    "the rotation dock must avoid every legal movement position");
+});
+var shieldOrientation=controlState.pieces[1].orientation;
+touch(controlGame,{clientX:controls.onboard[0].cx,clientY:controls.onboard[0].cy});
+assert.equal(controlGame._debugGame.snapshot().pieces[1].orientation,(shieldOrientation+3)%4,
+  "the labeled left-turn control must rotate counter-clockwise");
+controlGame.exit();
+
+var rightControlGame=LaserGame.create(fakeContext(),375,667,function(){});
+rightControlGame._debugGame.beginMatch();
+var rightShieldCenter=rightControlGame._debugEffects.projectBoardPoint(7,5,.273);
+touch(rightControlGame,{clientX:rightShieldCenter.x+22,clientY:rightShieldCenter.y});
+var rightControlState=rightControlGame._debugGame.snapshot();
+var rightControls=rightControlGame._debugEffects.snapshot();
+assert.deepEqual(rightControls.onboard.map(function(button){return button.direction;}),["left","right"],
+  "the rotation dock must expose mirrored counter-clockwise and clockwise controls");
+touch(rightControlGame,{clientX:rightControls.onboard[1].cx,clientY:rightControls.onboard[1].cy});
+assert.equal(rightControlGame._debugGame.snapshot().pieces[1].orientation,(rightControlState.pieces[1].orientation+1)%4,
+  "the labeled right-turn control must rotate clockwise");
+rightControlGame.exit();
+
+var resultCtx=fakeContext(),resultGame=LaserGame.create(resultCtx,375,667,function(){});
+resultGame._debugGame.beginMatch();
+resultGame._debugEffects.showResult("win",0);
+assert.equal(resultGame._debugGame.snapshot().resultAnim.t,0,
+  "the victory verdict must begin as a timed reveal");
+resultGame.update(.72);resultCtx._texts.length=0;resultCtx._arcs.length=0;resultGame.render();
+assert.ok(resultCtx._texts.indexOf("光路胜利")>=0 && resultCtx._texts.indexOf("再来一局")>=0,
+  "a player win must reveal a clear optical-victory card and replay action");
+assert.ok(resultCtx._arcs.length>=4,"the result reveal must include a focused optical crown animation");
+resultGame._debugEffects.showResult("win",1);
+resultGame.update(.72);resultCtx._texts.length=0;resultGame.render();
+assert.ok(resultCtx._texts.indexOf("防线失守")>=0,
+  "an AI win must be presented as a distinct player defeat");
+resultGame.exit();
+assert.equal(resultGame._debugGame.snapshot().resultAnim,null,
+  "exit must clear an in-flight result animation");
 
 for(var previewLayout = 0; previewLayout < 5; previewLayout++){
   game._debugGame.selectLayout(previewLayout);

@@ -60,7 +60,29 @@ function require(path) {
 <script src="games/laser/glb-loader.js"></script>
 <script>debugModules['glb-loader'] = module.exports; module = { exports: {} };</script>
 <script src="games/laser/webgl-renderer.js"></script>
-<script>debugModules['webgl-renderer'] = module.exports; module = { exports: {} };</script>
+<script>
+debugModules['webgl-renderer'] = module.exports;
+debugModules['../webgl-renderer'] = module.exports;
+module = { exports: {} };
+</script>
+<script src="games/laser/config/constants.js"></script>
+<script>
+debugModules['constants'] = module.exports;
+debugModules['../config/constants'] = module.exports;
+module = { exports: {} };
+</script>
+<script src="games/laser/config/formations.js"></script>
+<script>debugModules['../config/formations'] = module.exports; module = { exports: {} };</script>
+<script src="games/laser/core/rules.js"></script>
+<script>
+debugModules['rules'] = module.exports;
+debugModules['../core/rules'] = module.exports;
+module = { exports: {} };
+</script>
+<script src="games/laser/core/ai.js"></script>
+<script>debugModules['../core/ai'] = module.exports; module = { exports: {} };</script>
+<script src="games/laser/game/create-game.js"></script>
+<script>debugModules['game/create-game'] = module.exports; module = { exports: {} };</script>
 <script src="games/laser/laser-game.js"></script>
 <script>
 (function(){

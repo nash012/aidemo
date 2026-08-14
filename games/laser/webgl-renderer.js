@@ -6,6 +6,9 @@ var MODEL_PREFIX = {
   laser:"laser_cannon", king:"king", shield:"shield",
   mirror:"single_mirror", switch:"double_mirror"
 };
+var PIECE_SCALE = {
+  laser:.72, king:.78, shield:.78, mirror:.78, switch:.78
+};
 var RED = [[6,9],[5,9],[4,9],[3,9],[2,9],[1,9],[0,9],[7,1],[0,1]];
 var WHITE = [[7,0],[6,0],[5,0],[4,0],[3,0],[2,0],[1,0],[7,8],[0,8]];
 var MIRROR_MAP = [{1:0,2:3},{3:0,2:1},{3:2,0:1},{1:2,0:3}];
@@ -167,7 +170,8 @@ function modelMatrix(piece,pose){
   var angle = orientationAngle(piece.type,pose.orientation);
   if(!Number.isFinite(angle)) angle = 0;
   var poseScale = Number.isFinite(pose.scale) ? Math.max(0,pose.scale) : 1;
-  var cos = Math.cos(angle), sin = Math.sin(angle), scale = 0.68 * poseScale;
+  var cos = Math.cos(angle), sin = Math.sin(angle);
+  var scale = (PIECE_SCALE[piece.type] || .76) * poseScale;
   return [scale*cos,0,-scale*sin,0, 0,scale,0,0, scale*sin,0,scale*cos,0,
     world.x,0.02+(pose.height||0),world.z,1];
 }
@@ -176,7 +180,8 @@ function create(options){
   options = options || {};
   var canvas = options.canvas;
   var state = {mode:"loading", reason:null};
-  var gl = null, program = null, resources = {}, board = null, boardEdge = null, beam = null, ring = null, disposed = false;
+  var gl = null, program = null, resources = {}, board = null, boardEdge = null;
+  var beam = null, ring = null, shadow = null, disposed = false;
   var displayWidth = canvas && canvas.width || 1, displayHeight = canvas && canvas.height || 1;
   var locations = null;
 
@@ -210,12 +215,20 @@ function create(options){
         "varying vec3 vNormal; varying vec3 vLocalNormal; void main(){vLocalNormal=aNormal;" +
         "vNormal=mat3(uModel)*aNormal;gl_Position=uMvp*vec4(aPosition,1.0);}");
       fragment = compile(gl.FRAGMENT_SHADER,
-        "precision mediump float; varying vec3 vNormal; varying vec3 vLocalNormal; uniform vec4 uColor;" +
+        "precision mediump float; varying vec3 vNormal; varying vec3 vLocalNormal; uniform vec4 uColor; uniform vec4 uStyle;" +
         "void main(){vec4 base=uColor;bool oneSided=base.a>1.5;" +
         "float mirrorSide=dot(normalize(vLocalNormal),normalize(vec3(1.0,0.0,1.0)));" +
         "if(oneSided&&mirrorSide<.65)base=vec4(.025,.030,.042,1.0);else base.a=min(base.a,1.0);" +
-        "float l=.58+.42*max(dot(normalize(vNormal),normalize(vec3(.3,.8,.5))),0.0);" +
-        "gl_FragColor=vec4(base.rgb*l,base.a);}");
+        "vec3 n=normalize(vNormal);float key=max(dot(n,normalize(vec3(.3,.82,.48))),0.0);" +
+        "if(uStyle.x<.5){float matte=.84+.16*key;gl_FragColor=vec4(base.rgb*matte,base.a);}" +
+        "else if(uStyle.x<1.5){float grey=dot(base.rgb,vec3(.299,.587,.114));" +
+        "vec3 vivid=clamp(mix(vec3(grey),base.rgb,1.22),0.0,1.0);" +
+        "float bands=.58+.18*step(.18,key)+.24*step(.62,key);" +
+        "float rim=pow(1.0-max(dot(n,normalize(uStyle.yzw)),0.0),2.0);" +
+        "vec3 lit=mix(vivid*bands,vec3(.012,.022,.040),rim*.64);" +
+        "lit+=vec3(.07,.085,.10)*pow(max(n.y,0.0),10.0);" +
+        "gl_FragColor=vec4(clamp(lit,0.0,1.0),base.a);}" +
+        "else{gl_FragColor=base;}}");
       program = gl.createProgram();
       if(!program) throw new Error("program allocation failed");
       gl.attachShader(program, vertex); gl.attachShader(program, fragment); gl.linkProgram(program);
@@ -227,9 +240,11 @@ function create(options){
         normal:gl.getAttribLocation(program,"aNormal"),
         mvp:gl.getUniformLocation(program,"uMvp"),
         model:gl.getUniformLocation(program,"uModel"),
-        color:gl.getUniformLocation(program,"uColor")
+        color:gl.getUniformLocation(program,"uColor"),
+        style:gl.getUniformLocation(program,"uStyle")
       };
-      if(locations.position < 0 || locations.normal < 0 || !locations.mvp || !locations.model || !locations.color)
+      if(locations.position < 0 || locations.normal < 0 || !locations.mvp ||
+         !locations.model || !locations.color || !locations.style)
         throw new Error("required shader locations unavailable");
       gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -237,6 +252,7 @@ function create(options){
       boardEdge = createBoardEdge();
       beam = createBeam();
       ring = createRing();
+      shadow = createShadow();
       return true;
     } catch(e){
       if(gl && vertex) gl.deleteShader(vertex);
@@ -264,8 +280,8 @@ function create(options){
     var positions = [], normals = [], indices = [];
     for(var row=0;row<ROWS;row++) for(var col=0;col<COLS;col++){
       var center = cellToWorld(row,col), base = positions.length / 3;
-      positions.push(center.x-.49,0,center.z-.49, center.x+.49,0,center.z-.49,
-        center.x+.49,0,center.z+.49, center.x-.49,0,center.z+.49);
+      positions.push(center.x-.475,0,center.z-.475, center.x+.475,0,center.z-.475,
+        center.x+.475,0,center.z+.475, center.x-.475,0,center.z+.475);
       for(var n=0;n<4;n++) normals.push(0,1,0);
       indices.push(base,base+1,base+2, base,base+2,base+3);
     }
@@ -308,7 +324,7 @@ function create(options){
   }
 
   function createRing(){
-    var positions=[],normals=[],indices=[],segments=24,inner=.31,outer=.42;
+    var positions=[],normals=[],indices=[],segments=32,inner=.39,outer=.47;
     for(var i=0;i<segments;i++){
       var angle=i*Math.PI*2/segments,cos=Math.cos(angle),sin=Math.sin(angle);
       positions.push(cos*inner,.035,sin*inner,cos*outer,.035,sin*outer);
@@ -317,6 +333,22 @@ function create(options){
       indices.push(i*2,i*2+1,next*2+1,i*2,next*2+1,next*2);
     }
     var item=withBuffers("ring buffer allocation failed",function(buffers){
+      gl.bindBuffer(gl.ARRAY_BUFFER,buffers.position); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(positions),gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER,buffers.normal); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(normals),gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,buffers.index); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(indices),gl.STATIC_DRAW);
+    });
+    item.count=indices.length; return item;
+  }
+
+  function createShadow(){
+    var positions=[0,.014,0],normals=[0,1,0],indices=[],segments=24;
+    for(var i=0;i<segments;i++){
+      var angle=i*Math.PI*2/segments;
+      positions.push(Math.cos(angle),.014,Math.sin(angle));
+      normals.push(0,1,0);
+    }
+    for(var j=0;j<segments;j++) indices.push(0,j+1,(j+1)%segments+1);
+    var item=withBuffers("shadow buffer allocation failed",function(buffers){
       gl.bindBuffer(gl.ARRAY_BUFFER,buffers.position); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(positions),gl.STATIC_DRAW);
       gl.bindBuffer(gl.ARRAY_BUFFER,buffers.normal); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(normals),gl.STATIC_DRAW);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,buffers.index); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(indices),gl.STATIC_DRAW);
@@ -378,6 +410,7 @@ function create(options){
       if(boardEdge){ gl.deleteBuffer(boardEdge.position); gl.deleteBuffer(boardEdge.normal); gl.deleteBuffer(boardEdge.index); }
       if(beam){ gl.deleteBuffer(beam.position); gl.deleteBuffer(beam.normal); gl.deleteBuffer(beam.index); }
       if(ring){ gl.deleteBuffer(ring.position); gl.deleteBuffer(ring.normal); gl.deleteBuffer(ring.index); }
+      if(shadow){ gl.deleteBuffer(shadow.position); gl.deleteBuffer(shadow.normal); gl.deleteBuffer(shadow.index); }
       Object.keys(resources).forEach(function(key){
         resources[key].forEach(function(item){
           if(item.position) gl.deleteBuffer(item.position);
@@ -387,7 +420,7 @@ function create(options){
       });
       if(program) gl.deleteProgram(program);
     }
-    resources = {}; board = null; boardEdge = null; beam = null; ring = null; program = null; locations = null;
+    resources = {}; board = null; boardEdge = null; beam = null; ring = null; shadow = null; program = null; locations = null;
   }
 
   function bindAttributes(part){
@@ -402,9 +435,30 @@ function create(options){
 
   function colorForCell(row,col){
     var key = row + "," + col;
-    for(var i=0;i<RED.length;i++) if(RED[i][0]+","+RED[i][1] === key) return [0.62,0.12,0.10,1];
-    for(var j=0;j<WHITE.length;j++) if(WHITE[j][0]+","+WHITE[j][1] === key) return [0.82,0.84,0.88,1];
-    return (row+col)%2 ? [0.20,0.22,0.28,1] : [0.29,0.32,0.39,1];
+    for(var i=0;i<RED.length;i++) if(RED[i][0]+","+RED[i][1] === key) return [.56,.075,.095,1];
+    for(var j=0;j<WHITE.length;j++) if(WHITE[j][0]+","+WHITE[j][1] === key) return [.80,.84,.90,1];
+    return (row+col)%2 ? [.115,.145,.205,1] : [.225,.265,.335,1];
+  }
+
+  function setStyle(kind,viewDirection){
+    viewDirection=viewDirection || [0,1,0];
+    gl.uniform4fv(locations.style,new Float32Array([
+      kind,viewDirection[0],viewDirection[1],viewDirection[2]
+    ]));
+  }
+
+  function drawPieceShadow(piece,pose,viewProjection){
+    pose=pose || piece;
+    var world=cellToWorld(pose.row,pose.col),poseScale=Number.isFinite(pose.scale)?Math.max(0,pose.scale):1;
+    var model=identity(),radius=.49*poseScale;
+    model[0]=radius;model[10]=radius;model[12]=world.x;model[14]=world.z;
+    bindAttributes(shadow);
+    gl.uniformMatrix4fv(locations.model,false,new Float32Array(model));
+    gl.uniformMatrix4fv(locations.mvp,false,new Float32Array(multiply(viewProjection,model)));
+    gl.uniform4fv(locations.color,new Float32Array([.005,.010,.020,.34]));
+    if(typeof gl.depthMask === "function") gl.depthMask(false);
+    gl.drawElements(gl.TRIANGLES,shadow.count,gl.UNSIGNED_SHORT,0);
+    if(typeof gl.depthMask === "function") gl.depthMask(true);
   }
 
   function validPath(path){
@@ -470,8 +524,11 @@ function create(options){
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
       gl.useProgram(program);
-      var viewProjection = cameraData(displayWidth,displayHeight,scene.camera).viewProjection;
+      var camera = cameraData(displayWidth,displayHeight,scene.camera);
+      var viewProjection = camera.viewProjection;
+      var viewDirection=[-camera.forward[0],-camera.forward[1],-camera.forward[2]];
       var boardModel = identity();
+      setStyle(0,viewDirection);
       bindAttributes(board);
       gl.uniformMatrix4fv(locations.model,false,new Float32Array(boardModel));
       gl.uniformMatrix4fv(locations.mvp,false,new Float32Array(multiply(viewProjection,boardModel)));
@@ -480,8 +537,15 @@ function create(options){
         gl.drawElements(gl.TRIANGLES,6,gl.UNSIGNED_SHORT,(row*COLS+col)*12);
       }
       bindAttributes(boardEdge);
-      gl.uniform4fv(locations.color,new Float32Array([.08,.09,.13,1]));
+      gl.uniform4fv(locations.color,new Float32Array([.035,.050,.085,1]));
       gl.drawElements(gl.TRIANGLES,boardEdge.count,gl.UNSIGNED_SHORT,0);
+      setStyle(2,viewDirection);
+      (scene.pieces || []).forEach(function(piece,pieceIndex){
+        if(!piece.alive) return;
+        var poses=scene.aiPose&&scene.aiPose.poses;
+        drawPieceShadow(piece,poses&&(poses[pieceIndex]||poses[String(pieceIndex)]),viewProjection);
+      });
+      setStyle(1,viewDirection);
       (scene.pieces || []).forEach(function(piece,pieceIndex){
         if(!piece.alive) return;
         var parts = resources[pieceModelKey(piece)] || [];
@@ -501,6 +565,7 @@ function create(options){
           gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_SHORT, 0);
         });
       });
+      setStyle(2,viewDirection);
       if(scene.selected >= 0 && scene.pieces && scene.pieces[scene.selected]){
         var selected=scene.pieces[scene.selected];
         drawRing(selected.row,selected.col,viewProjection,[1,.82,.18,.85]);

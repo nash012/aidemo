@@ -318,7 +318,7 @@ assert.ok(Math.abs(animatedModel[12] - 1.5) < 1e-6 &&
   Math.abs(animatedModel[13] - 0.32) < 1e-6 &&
   Math.abs(animatedModel[14] - 0.5) < 1e-6,
   "AI animation poses must drive the rendered GLB instance before rule state commits");
-assert.ok(Math.abs(Math.hypot(animatedModel[0],animatedModel[2])-.34)<1e-6,
+assert.ok(Math.abs(Math.hypot(animatedModel[0],animatedModel[2])-.39)<1e-6,
   "elimination poses must be able to shrink a rendered GLB before it disappears");
 
 var drawsBeforeBaseline = observedGl._calls.drawElements;
