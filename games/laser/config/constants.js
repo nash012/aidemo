@@ -18,11 +18,11 @@ module.exports = {
   DY:[-1,0,1,0],
   DIRS8:[[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]],
   PIECE:{LASER:LASER,KING:KING,SHIELD:SHIELD,MIRROR:MIRROR,SWITCH:SWITCH},
-  PIECE_VALUE:{king:10000,shield:3,switch:4,mirror:2,laser:0},
+  PIECE_VALUE:{king:10000,shield:3,switch:5,mirror:4,laser:0},
   AI_LEVELS:{
-    easy:{attack:1.05,defense:1.10,guard:1.15,reply:0,advance:0.55,initiative:1.10,passive:0.24,candidates:24,variety:3.0,depth:1},
-    normal:{attack:2.35,defense:1.00,guard:0.90,reply:0.65,advance:0.90,initiative:1.60,passive:0.32,candidates:40,variety:1.0,depth:2},
-    hard:{attack:2.15,defense:1.20,guard:1.10,reply:1.0,advance:1.10,initiative:2.00,passive:0.38,candidates:40,variety:0.25,depth:3}
+    easy:{attack:0.7,defense:0.7,guard:0.8,reply:0,advance:0.35,initiative:0.4,passive:0.1,candidates:12,variety:4.0,depth:1,foresight:0.15,caution:0.25,blunder:0.15},
+    normal:{attack:2.0,defense:1.3,guard:1.0,reply:0.5,advance:0.85,initiative:1.5,passive:0.28,candidates:40,variety:1.0,depth:2,foresight:0.55,caution:0.7,blunder:0},
+    hard:{attack:2.5,defense:1.6,guard:1.3,reply:1.0,advance:1.15,initiative:2.0,passive:0.38,candidates:50,variety:0.2,depth:3,foresight:0.8,caution:1.0,blunder:0}
   },
   MIRROR_MAP:[{1:0,2:3},{3:0,2:1},{3:2,0:1},{1:2,0:3}],
   SWITCH_SLASH:{1:0,0:1,3:2,2:3},

@@ -2360,6 +2360,7 @@ module.exports = {
       if(_kingKilled >= 0){
         G.winner = 1 - _kingKilled;
         G.over = true; G.busy = false; G.phase = "over";
+        if(G.mode === "pve") AI.updateProfile(null,null,0, G.winner===G.aiPlayer ? "loss" : "win");
         _setTrackTimeout(function(){startResultModal("win");},420);
         return;
       }
@@ -2368,6 +2369,7 @@ module.exports = {
     }
     function endTurn(){
       if(G.mode === "pve" && G.current !== G.aiPlayer){
+        AI.updateProfile(G.turnStartPieces,G.pieces,G.current);
         if(passiveHumanTurn(G.turnStartPieces,G.pieces,G.current))
           G.playerPassiveTurns=Math.min(3,G.playerPassiveTurns+1);
         else G.playerPassiveTurns=0;
