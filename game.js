@@ -28,6 +28,8 @@ var isInMenu = true;
 var BACK_BTN = { x: 10, y: 10, w: 78, h: 34 };
 
 function createLaserGame() {
+  var launchOptions = {};
+  try { launchOptions = wx.getLaunchOptionsSync() || {}; } catch(e) {}
   var L = require("./games/laser/laser-game.js");
   return L.create(ctx, W, H, returnToMenu, {
     createCanvas: function(){ return wx.createCanvas(); },
@@ -41,7 +43,8 @@ function createLaserGame() {
         });
       } catch (error) { done(error); }
     },
-    dpr: DPR
+    dpr: DPR,
+    launchOptions: launchOptions
   });
 }
 
@@ -157,6 +160,15 @@ function drawBackButton() {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText("← 返回", b.x + b.w / 2, b.y + b.h / 2 + 1);
+}
+
+// ==================== onShow（处理已打开小程序时点击邀请链接） ====================
+if (wx.onShow) {
+  wx.onShow(function (options) {
+    if (currentModule && currentModule.onShow) {
+      try { currentModule.onShow(options); } catch (err) { console.error("[合集] onShow:", err); }
+    }
+  });
 }
 
 // ==================== 主循环 ====================

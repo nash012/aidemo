@@ -9,6 +9,7 @@ var Constants = require("../config/constants.js");
 var Formations = require("../config/formations.js");
 var Rules = require("../core/rules.js");
 var AI = require("../core/ai.js");
+var Online = require("../online.js");
 
 module.exports = {
   create: function(ctx, W, H, returnToMenu, platform) {
@@ -71,6 +72,8 @@ module.exports = {
     // yaw=0 正对棋盘，无偏转
     var DEFAULT_YAW = 0;
     var DEFAULT_PITCH = 0.95;
+    // 在线对战蓝方的主视角：棋盘绕Y轴旋转180°
+    var homeYaw = DEFAULT_YAW;
     var SETUP_PITCH = 1.08;
     var MIN_MATCH_PITCH = 0.50;
     var MAX_MATCH_PITCH = 1.50;
@@ -145,7 +148,11 @@ module.exports = {
       history:{}, drawOffer:false, modal:null, flashN:0, flashPiece:null,
       eliminated:null, layoutIdx:0, undoSnapshot:null,
       particles:[], particleT:0, dropdownOpen:false, diffDropdownOpen:false,
-      playerPassiveTurns:0, turnStartPieces:null, killAnim:null, resultAnim:null
+      playerPassiveTurns:0, turnStartPieces:null, killAnim:null, resultAnim:null,
+      onlineDisconnectReason:null,
+      online:null, lastAction:null, onlinePendingFire:null,
+      rpsMyChoice:null, rpsOpponentChoice:null, rpsResult:null,
+      formationIdx:0
     };
 
     /* -------------------- WebGL 棋盘（失败时保留现有伪3D） -------------------- */
@@ -197,7 +204,7 @@ module.exports = {
         beamPulse:G.beamPulseT,
         aiPose:visualPose,
         camera:webglCamera(),
-        setup:G.screen === "setup",
+        setup:(G.screen === "setup" || G.screen === "formation_select"),
         zoneCells:WebGLRenderer.zoneCells()
       };
     }
@@ -211,12 +218,13 @@ module.exports = {
       var setupDistance=27*tallScreenScale;
       var matchBaseDistance=26*tallScreenScale;
       var matchDistance=Math.max(matchBaseDistance,matchBaseDistance*halfWidth/5.65);
+      var isSetup = G.screen === "setup" || G.screen === "formation_select";
       var zoom=G.screen === "playing" ? Math.max(.72,Math.min(1.48,cam.zoom||1)) : 1;
       return {
         yaw:cam.yaw,
         pitch:cam.pitch,
-        distance:G.screen === "setup" ? setupDistance : matchDistance/zoom,
-        offsetY:G.screen === "setup" ? -90 : (boardAreaTop+boardAreaBot-SH)/2-7
+        distance:isSetup ? setupDistance : matchDistance/zoom,
+        offsetY:isSetup ? -90 : (boardAreaTop+boardAreaBot-SH)/2-7
       };
     }
 
@@ -279,7 +287,7 @@ module.exports = {
 
     function setMatchCamera(){
       camAnim = null;
-      cam.yaw = DEFAULT_YAW; cam.pitch = DEFAULT_PITCH; cam.zoom=1;
+      cam.yaw = homeYaw; cam.pitch = DEFAULT_PITCH; cam.zoom=1;
       cam.cx = SW / 2; cam.cy = (boardAreaTop + boardAreaBot) / 2;
       updateMatchCameraFit();
     }
@@ -290,7 +298,9 @@ module.exports = {
       // collapses into a thin strip and distant rows become visually hidden.
       var minimumPitch=MIN_MATCH_PITCH+Math.max(0,1-cam.zoom)*.30;
       cam.pitch=Math.max(minimumPitch,Math.min(MAX_MATCH_PITCH,cam.pitch));
-      cam.yaw=Math.max(-1.6,Math.min(1.6,cam.yaw));
+      // 手势旋转限制在主视角±1.6rad内；蓝方主视角为π，同样可自由环视
+      // 相机动画期间不钳制，避免开局180°旋转被边界截断
+      if(!camAnim) cam.yaw=Math.max(homeYaw-1.6,Math.min(homeYaw+1.6,cam.yaw));
     }
 
     function updateMatchCameraFit(){
@@ -309,6 +319,7 @@ module.exports = {
       G.lockedDifficulty = null;
       G.dropdownOpen = false;
       G.diffDropdownOpen = false;
+      rulesLongPress.active=false; rulesLongPress.triggered=false;
       G.pieces = makeInitialPieces(G.layoutIdx);
       G.current=0; G.phase="select"; G.over=false; G.winner=-1;
       G.history={}; G.drawOffer=false; G.modal=null; G.busy=false;
@@ -325,6 +336,7 @@ module.exports = {
       G.lockedDifficulty = G.difficulty;
       G.screen = "playing";
       resetMatchState(makeInitialPieces(G.lockedLayoutIdx));
+      homeYaw = DEFAULT_YAW;
       setMatchCamera();
       render();
     }
@@ -332,13 +344,15 @@ module.exports = {
     function restartMatch(){
       if(G.screen !== "playing") return;
       resetMatchState(makeInitialPieces(G.lockedLayoutIdx));
+      homeYaw = DEFAULT_YAW;
       setMatchCamera();
       render();
     }
 
     function selectLayout(index){
-      if(G.screen !== "setup" || typeof index !== "number" || index % 1 !== 0 || index < 0 || index >= LAYOUTS.length) return;
+      if((G.screen !== "setup" && G.screen !== "formation_select") || typeof index !== "number" || index % 1 !== 0 || index < 0 || index >= LAYOUTS.length) return;
       G.layoutIdx = index;
+      G.formationIdx = index;
       G.pieces = makeInitialPieces(index);
       setSetupCamera();
       render();
@@ -371,6 +385,10 @@ module.exports = {
 
     function confirmReturnToSetup(){
       if(G.modal !== "confirmReturn") return;
+      if(G.mode === "online"){
+        if(!(G.online && G.online.simulated)){ try{ Online.leaveRoom(); }catch(e){} }
+        G.online = null; G.mode = "pve";
+      }
       G.layoutIdx = G.lockedLayoutIdx;
       G.difficulty = G.lockedDifficulty;
       enterSetup();
@@ -1813,7 +1831,7 @@ module.exports = {
         resultBeam.addColorStop(0,"#f4fcff");resultBeam.addColorStop(.62,"#d8f5ff");resultBeam.addColorStop(1,"#ffd34e");
         ctx.shadowColor="rgba(101,217,255,.42)";ctx.shadowBlur=12;
         ctx.fillStyle=resultBeam;roundRect(b.x,b.y,b.w,b.h,12);ctx.fill();
-        ctx.shadowBlur=0;ctx.strokeStyle="#ffffff";ctx.lineWidth=1;ctx.stroke();
+        ctx.shadowBlur=0;ctx.shadowColor="rgba(0,0,0,0)";ctx.strokeStyle="#ffffff";ctx.lineWidth=1;ctx.stroke();
         ctx.fillStyle="#09151b";ctx.font="700 14px 'PingFang SC',sans-serif";
         ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(b.label,b.x+b.w/2,b.y+b.h/2+1);
         return;
@@ -1841,6 +1859,32 @@ module.exports = {
         ctx.fillStyle = "#0d1519";ctx.font = "700 13px 'PingFang SC', sans-serif";ctx.textBaseline="middle";
         ctx.fillText(b.label,b.x+14,b.y+30);
         ctx.strokeStyle="#147daf";ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(b.x+b.w-19,b.y+b.h/2-4);ctx.lineTo(b.x+b.w-14,b.y+b.h/2);ctx.lineTo(b.x+b.w-19,b.y+b.h/2+4);ctx.stroke();
+        return;
+      }
+      if(b.style === "setupOnline"){
+        ctx.fillStyle = "rgba(99,201,255,0.10)";
+        ctx.fillRect(b.x, b.y, b.w, b.h);
+        ctx.strokeStyle = "#63c9ff"; ctx.lineWidth = 1; ctx.strokeRect(b.x+0.5,b.y+0.5,b.w-1,b.h-1);
+        ctx.fillStyle = "#63c9ff"; ctx.fillRect(b.x, b.y, b.w, 2);
+        ctx.fillStyle = "#63c9ff"; ctx.font = "600 7px 'Arial Narrow', sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+        ctx.fillText("ONLINE", b.x+10, b.y+12);
+        ctx.fillStyle = "#d4f0ff"; ctx.font = "700 13px 'PingFang SC', sans-serif"; ctx.textBaseline = "middle";
+        ctx.fillText(b.label, b.x+b.w/2, b.y+b.h/2+3);
+        return;
+      }
+      if(b.style === "rps"){
+        var rpsGrad = ctx.createLinearGradient(b.x, b.y, b.x, b.y+b.h);
+        rpsGrad.addColorStop(0, "rgba(99,201,255,0.16)");
+        rpsGrad.addColorStop(1, "rgba(45,90,130,0.12)");
+        ctx.fillStyle = rpsGrad;
+        roundRect(b.x, b.y, b.w, b.h, 14); ctx.fill();
+        ctx.strokeStyle = "rgba(99,201,255,0.5)"; ctx.lineWidth = 1.5; ctx.stroke();
+        if(b.icon){
+          ctx.fillStyle = "#d4f0ff"; ctx.font = "32px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText(b.icon, b.x+b.w/2, b.y+b.h/2-8);
+        }
+        ctx.fillStyle = "#a9c6d3"; ctx.font = "600 13px 'PingFang SC', sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(b.label, b.x+b.w/2, b.y+b.h-14);
         return;
       }
       ctx.fillStyle = fill;
@@ -1874,45 +1918,9 @@ module.exports = {
     }
 
     function buildOnBoardButtons3D(){
+      // 旋转操作已移至底部按钮栏，棋盘上不再显示浮动控制面板
       ONBOARD = [];
       CONTROL_DOCK = null;
-      if(G.phase !== "move" || G.sel < 0 || G.busy || G.over) return;
-      var p = G.pieces[G.sel];
-      if(!p || !p.alive) return;
-      var ph = pieceHeight(p.type);
-      var anchor=projectBoardPoint(p.row,p.col,ph*.58);
-      var adjacent=projectBoardPoint(p.row,Math.min(COLS-1,p.col+1),.05);
-      if(p.col===COLS-1) adjacent=projectBoardPoint(p.row,p.col-1,.05);
-      var span=Math.max(34,Math.hypot(adjacent.x-anchor.x,adjacent.y-anchor.y));
-      var dockW=p.type===LASER?86:136,dockH=p.type===LASER?74:82;
-      var vertical=Math.max(76,span*1.55),horizontal=Math.max(88,span*2.05);
-      var options=[
-        {cx:anchor.x,cy:anchor.y-vertical},
-        {cx:anchor.x,cy:anchor.y+vertical},
-        {cx:anchor.x-horizontal,cy:anchor.y},
-        {cx:anchor.x+horizontal,cy:anchor.y}
-      ];
-      var targetPoints=moveTargets(p).map(function(target){return projectBoardPoint(target.r,target.c,.05);});
-      var best=null,bestScore=-Infinity;
-      for(var i=0;i<options.length;i++){
-        var rect={x:options[i].cx-dockW/2,y:options[i].cy-dockH/2,w:dockW,h:dockH};
-        var score=dockClearance(rect,targetPoints);
-        if(score>bestScore){bestScore=score;best={cx:options[i].cx,cy:options[i].cy,rect:rect};}
-      }
-      if(!best || bestScore<0){
-        var fallbackY=anchor.y<(boardAreaTop+boardAreaBot)/2?boardAreaBot-dockH/2-12:boardAreaTop+dockH/2+30;
-        best={cx:Math.max(dockW/2+8,Math.min(SW-dockW/2-8,anchor.x)),cy:fallbackY};
-        best.rect={x:best.cx-dockW/2,y:best.cy-dockH/2,w:dockW,h:dockH};
-      }
-      CONTROL_DOCK={cx:best.cx,cy:best.cy,x:best.rect.x,y:best.rect.y,w:dockW,h:dockH,anchor:anchor,
-        title:p.type===LASER?"切换炮口":"旋转方向"};
-      var btnR=p.type===LASER?22:20,buttonY=best.cy+(p.type===LASER?8:2);
-      if(p.type === LASER){
-        ONBOARD.push({cx:best.cx,cy:buttonY,r:btnR,direction:"toggle",label:"换向",fn:doLaserToggle});
-      } else {
-        ONBOARD.push({cx:best.cx-32,cy:buttonY,r:btnR,direction:"left",label:"左转",angleLabel:"−90°",fn:function(){doRotate(3);}});
-        ONBOARD.push({cx:best.cx+32,cy:buttonY,r:btnR,direction:"right",label:"右转",angleLabel:"+90°",fn:function(){doRotate(1);}});
-      }
     }
     function drawTurnGlyph(b){
       var clockwise=b.direction!=="left",radius=8;
@@ -1935,37 +1943,44 @@ module.exports = {
       if(!CONTROL_DOCK) return;
       var d=CONTROL_DOCK;
       ctx.save();
-      ctx.strokeStyle="rgba(101,217,255,.38)";ctx.lineWidth=1;
-      ctx.beginPath();ctx.moveTo(d.anchor.x,d.anchor.y);ctx.lineTo(d.cx,d.cy);ctx.stroke();
-      ctx.shadowColor="rgba(101,217,255,.35)";ctx.shadowBlur=14;
+      // 引导线从棋子指向底部控制面板
+      ctx.strokeStyle="rgba(101,217,255,.30)";ctx.lineWidth=1;
+      ctx.setLineDash([3,3]);
+      ctx.beginPath();ctx.moveTo(d.anchor.x,d.anchor.y);ctx.lineTo(d.cx,d.y);ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.shadowColor="rgba(101,217,255,.30)";ctx.shadowBlur=10;
       var panel=ctx.createLinearGradient(d.x,d.y,d.x+d.w,d.y+d.h);
       panel.addColorStop(0,"rgba(10,20,29,.96)");panel.addColorStop(1,"rgba(18,40,51,.96)");
-      ctx.fillStyle=panel;roundRect(d.x,d.y,d.w,d.h,16);ctx.fill();
-      ctx.shadowBlur=0;ctx.strokeStyle="rgba(101,217,255,.72)";ctx.lineWidth=1;ctx.stroke();
-      ctx.fillStyle="#87a6b2";ctx.font="600 8px 'Arial Narrow',sans-serif";
-      ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(d.title,d.cx,d.y+13);
+      ctx.fillStyle=panel;roundRect(d.x,d.y,d.w,d.h,12);ctx.fill();
+      ctx.shadowBlur=0;ctx.strokeStyle="rgba(101,217,255,.62)";ctx.lineWidth=1;ctx.stroke();
+      ctx.fillStyle="#87a6b2";ctx.font="600 7px 'Arial Narrow',sans-serif";
+      ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(d.title,d.cx,d.y+9);
       for(var i=0;i<ONBOARD.length;i++){
         var b = ONBOARD[i];
         var isLeft=b.direction==="left";
+        var isToggle=b.direction==="toggle";
         var glow=ctx.createRadialGradient(b.cx,b.cy,0,b.cx,b.cy,b.r*1.55);
-        glow.addColorStop(0,isLeft?"rgba(126,229,255,.38)":"rgba(70,190,255,.38)");
+        glow.addColorStop(0,isLeft?"rgba(126,229,255,.38)":(isToggle?"rgba(255,206,84,.38)":"rgba(70,190,255,.38)"));
         glow.addColorStop(1,"rgba(101,217,255,0)");
         ctx.fillStyle=glow;ctx.beginPath();ctx.arc(b.cx,b.cy,b.r*1.55,0,6.283);ctx.fill();
         var face=ctx.createLinearGradient(b.cx-b.r,b.cy-b.r,b.cx+b.r,b.cy+b.r);
         if(isLeft){face.addColorStop(0,"#1d5d73");face.addColorStop(1,"#0b2633");}
+        else if(isToggle){face.addColorStop(0,"#4a3d18");face.addColorStop(1,"#2a2208");}
         else{face.addColorStop(0,"#12374f");face.addColorStop(1,"#0a2030");}
         ctx.fillStyle=face;
-        ctx.strokeStyle=isLeft?"#8be9ff":"#4dc4ff";ctx.lineWidth=1.5;
+        ctx.strokeStyle=isLeft?"#8be9ff":(isToggle?"#ffd34e":"#4dc4ff");ctx.lineWidth=1.5;
         ctx.beginPath(); ctx.arc(b.cx, b.cy, b.r, 0, 6.283); ctx.fill(); ctx.stroke();
         drawTurnGlyph(b);
-        ctx.strokeStyle=isLeft?"#8be9ff":"#4dc4ff";ctx.lineWidth=2.2;ctx.beginPath();
-        var railX=b.cx+(isLeft?-b.r+4:b.r-4);
-        ctx.moveTo(railX,b.cy-7);ctx.lineTo(railX,b.cy+7);ctx.stroke();
-        ctx.fillStyle="#d9f7ff";ctx.font="700 7px 'Arial Narrow',sans-serif";
-        ctx.fillText(b.angleLabel||b.label,b.cx,b.cy+10);
+        if(!isToggle){
+          ctx.strokeStyle=isLeft?"#8be9ff":"#4dc4ff";ctx.lineWidth=2.2;ctx.beginPath();
+          var railX=b.cx+(isLeft?-b.r+4:b.r-4);
+          ctx.moveTo(railX,b.cy-7);ctx.lineTo(railX,b.cy+7);ctx.stroke();
+        }
+        ctx.fillStyle=isToggle?"#ffd34e":"#d9f7ff";ctx.font="700 7px 'Arial Narrow',sans-serif";
+        ctx.fillText(b.angleLabel||b.label,b.cx,b.cy+9);
         if(b.angleLabel){
-          ctx.fillStyle="#9fc7d4";ctx.font="600 8px 'PingFang SC',sans-serif";
-          ctx.fillText(b.label,b.cx,d.y+d.h-9);
+          ctx.fillStyle="#9fc7d4";ctx.font="600 7px 'PingFang SC',sans-serif";
+          ctx.fillText(b.label,b.cx,d.y+d.h-7);
         }
       }
       ctx.restore();
@@ -1984,11 +1999,39 @@ module.exports = {
       try {
         BUTTONS = [];
         ONBOARD = [];
+        ctx.globalAlpha = 1;
+        ctx.shadowBlur = 0;
+        ctx.shadowColor = "rgba(0,0,0,0)";
         ctx.fillStyle = "#0a0e1a";
         ctx.fillRect(0, 0, SW, SH);
 
         if(G.screen === "setup"){
           renderSetup();
+          if(G.modal) drawModal();
+          return;
+        }
+        if(G.screen === "online_wait"){
+          drawOnlineWaitScreen();
+          if(G.modal) drawModal();
+          return;
+        }
+        if(G.screen === "online_join"){
+          drawOnlineJoinScreen();
+          if(G.modal) drawModal();
+          return;
+        }
+        if(G.screen === "rps"){
+          drawRpsScreen();
+          if(G.modal) drawModal();
+          return;
+        }
+        if(G.screen === "formation_select"){
+          drawFormationSelectScreen();
+          if(G.modal) drawModal();
+          return;
+        }
+        if(G.screen === "formation_wait"){
+          drawFormationWaitScreen();
           if(G.modal) drawModal();
           return;
         }
@@ -2019,6 +2062,7 @@ module.exports = {
         buildOnBoardButtons3D();
         drawOnBoardButtons3D();
         drawStatus();
+        drawTurnBanner();
         if(!G.modal){
           buildActionButtons();
           layoutButtons();
@@ -2149,17 +2193,38 @@ module.exports = {
       drawDifficultySelector(setupY);
       var actionY=Math.min(setupY+199,SH-SAFE_BOT-48);
       buildSetupButtons(actionY);
+      if(G.online && G.online.isHost && G.online.state === "waiting"){
+        var mbW = SW - 32, mbH = 36, mbX = 16, mbY = actionY - mbH - 6;
+        ctx.fillStyle = "rgba(99,201,255,0.10)"; roundRect(mbX, mbY, mbW, mbH, 8); ctx.fill();
+        ctx.strokeStyle = "#63c9ff"; ctx.lineWidth = 1; ctx.strokeRect(mbX+0.5, mbY+0.5, mbW-1, mbH-1);
+        ctx.fillStyle = "#63c9ff"; ctx.fillRect(mbX, mbY, 3, mbH);
+        var pulse = 0.5 + 0.5 * Math.sin(Date.now() / 500);
+        ctx.globalAlpha = pulse;
+        ctx.fillStyle = "#63c9ff"; ctx.beginPath(); ctx.arc(mbX + 18, mbY + mbH/2, 4, 0, Math.PI*2); ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = "#d4f0ff"; ctx.font = "600 12px 'PingFang SC', sans-serif";
+        ctx.textAlign = "left"; ctx.textBaseline = "middle";
+        ctx.fillText("在线匹配中", mbX + 30, mbY + mbH/2);
+        ctx.fillStyle = "#7ab5ff"; ctx.font = "10px 'PingFang SC', sans-serif";
+        ctx.fillText("好友加入后自动开始对战", mbX + 100, mbY + mbH/2);
+        BUTTONS.push({ x:mbX+mbW-80, y:mbY+4, w:72, h:mbH-8, label:"取消匹配", fn:cancelOnline, style:"ghost" });
+      }
       for(var i=0;i<BUTTONS.length;i++)drawButton(BUTTONS[i]);
     }
 
     function buildSetupButtons(actionY){
-      var margin=16,gap=8,rulesW=104,startW=SW-margin*2-gap-rulesW;
-      BUTTONS.push({x:margin,y:actionY,w:rulesW,h:46,label:"规则介绍",fn:openRules,style:"setupGhost"});
+      var margin=16,gap=8;
+      var totalW=SW-margin*2-gap;
+      var rulesW=Math.floor(totalW*0.30);
+      var startW=totalW-rulesW;
+      var rulesBtn={x:margin,y:actionY,w:rulesW,h:46,label:"规则",fn:openRules,style:"setupGhost"};
+      rulesLongPress.hitArea={x:rulesBtn.x,y:rulesBtn.y,w:rulesBtn.w,h:rulesBtn.h};
+      BUTTONS.push(rulesBtn);
       BUTTONS.push({x:margin+rulesW+gap,y:actionY,w:startW,h:46,label:"开始游戏",meta:"CALIBRATION COMPLETE",fn:beginMatch,style:"setupPrimary"});
     }
 
     function handleDropdownClick(x,y){
-      if(G.screen!=="setup")return false;
+      if(G.screen!=="setup" && G.screen!=="formation_select")return false;
       for(var i=0;i<SETUP_LAYOUT_HITS.length;i++){
         var a=SETUP_LAYOUT_HITS[i];
         if(x>=a.x&&x<=a.x+a.w&&y>=a.y&&y<=a.y+a.h){selectLayout(a.index);return true;}
@@ -2186,21 +2251,66 @@ module.exports = {
     }
 
     function drawTopBar(){
-      var turnTxt = G.over ? "对局结束" : (G.current===0 ? "红方行动" : "蓝方行动");
-      var col = G.over ? "#9aa3bd" : ownerColor(G.current, true);
+      var isOnline = G.mode === "online" && G.online;
+      var myTurn = isOnline && G.current === G.online.myPlayer;
+      var sideName = G.current===0 ? "红方" : "蓝方";
+      var turnTxt, col;
+      if(G.over){ turnTxt = "对局结束"; col = "#9aa3bd"; }
+      else if(isOnline){
+        turnTxt = myTurn ? "你的回合 · "+sideName : "对方回合 · "+sideName;
+        col = ownerColor(G.current, true);
+      }
+      else { turnTxt = sideName+"行动"; col = ownerColor(G.current, true); }
       var x=14,y=SAFE_TOP+5,w=SW-28;
       ctx.fillStyle="rgba(12,20,26,.90)";ctx.fillRect(x,y,w,TOPBAR_H-10);
       ctx.strokeStyle="rgba(113,145,157,.42)";ctx.lineWidth=1;ctx.strokeRect(x+.5,y+.5,w-1,TOPBAR_H-11);
+      // 在线模式：整条顶栏描边用当前行动方颜色，强化"谁的回合"
+      if(isOnline && !G.over){
+        ctx.strokeStyle=col;ctx.lineWidth=myTurn?2.5:1.5;
+        ctx.globalAlpha=myTurn?0.95:0.45;
+        ctx.strokeRect(x+.5,y+.5,w-1,TOPBAR_H-11);
+        ctx.globalAlpha=1;
+      }
       ctx.fillStyle="#76909a";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.textAlign="left";ctx.textBaseline="alphabetic";
       ctx.fillText("OPTICAL MATCH / LIVE ARRAY",x+10,y+12);
-      ctx.fillStyle=col;ctx.font="800 18px 'PingFang SC', sans-serif";ctx.fillText(turnTxt,x+10,y+35);
+      // 行动方色点 + 加大加粗回合文案
+      var dotX = x+16, txtX = x+28;
+      if(isOnline && !G.over){
+        var pulse = 0.5 + 0.5*Math.sin(G.beamPulseT*5);
+        ctx.fillStyle=col;
+        ctx.beginPath();
+        ctx.arc(dotX, y+30, myTurn ? 6+pulse*3 : 5, 0, Math.PI*2);
+        ctx.fill();
+        if(myTurn){
+          ctx.globalAlpha=0.35+0.4*pulse;
+          ctx.beginPath();
+          ctx.arc(dotX, y+30, 10+pulse*3, 0, Math.PI*2);
+          ctx.fill();
+          ctx.globalAlpha=1;
+        }
+      } else { txtX = x+10; }
+      ctx.fillStyle=col;ctx.font="800 19px 'PingFang SC', sans-serif";
+      ctx.globalAlpha = (isOnline && !myTurn && !G.over) ? 0.8 : 1;
+      ctx.fillText(turnTxt,txtX,y+36);
+      ctx.globalAlpha=1;
       ctx.fillStyle="#71868f";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.textAlign="right";
-      ctx.fillText((G.lockedDifficulty ? DIFFICULTY_LABEL[G.lockedDifficulty] : "")+"电脑 · 10 × 8",x+w-10,y+13);
-      ctx.fillStyle="#aebdc1";ctx.font="500 10px 'PingFang SC', sans-serif";ctx.fillText(G.busy?"正在计算光路":"拖动棋盘可旋转视角",x+w-10,y+34);
+      var modeTxt = isOnline
+        ? "在线对战 · 你执"+(G.online.myPlayer===0?"红":"蓝")
+        : (G.lockedDifficulty ? DIFFICULTY_LABEL[G.lockedDifficulty] : "")+"电脑";
+      ctx.fillText(modeTxt+" · 10 × 8",x+w-10,y+13);
+      ctx.fillStyle="#aebdc1";ctx.font="500 10px 'PingFang SC', sans-serif";ctx.fillText(G.busy?"等待对手…":"拖动棋盘可旋转视角",x+w-10,y+34);
       var railY=y+TOPBAR_H-15,mid=SW/2;
       var rail=ctx.createLinearGradient(x+10,railY,x+w-10,railY);
       rail.addColorStop(0,"#ff514a");rail.addColorStop(.48,"#ff514a");rail.addColorStop(.52,"#5ccbff");rail.addColorStop(1,"#5ccbff");
       ctx.strokeStyle=rail;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x+10,railY);ctx.lineTo(x+w-10,railY);ctx.stroke();
+      // 在线模式：行动方一侧半轨高亮
+      if(isOnline && !G.over){
+        ctx.strokeStyle=col;ctx.lineWidth=3;
+        ctx.beginPath();
+        if(G.current===0){ctx.moveTo(x+10,railY);ctx.lineTo(mid-4,railY);}
+        else{ctx.moveTo(mid+4,railY);ctx.lineTo(x+w-10,railY);}
+        ctx.stroke();
+      }
       var markerX=G.current===0?x+w*.27:x+w*.73;
       ctx.fillStyle=G.over?"#9aa3bd":"#e9f0ed";ctx.beginPath();ctx.moveTo(markerX,railY-5);ctx.lineTo(markerX+5,railY);ctx.lineTo(markerX,railY+5);ctx.lineTo(markerX-5,railY);ctx.closePath();ctx.fill();
       ctx.fillStyle="#ff7771";ctx.font="600 7px 'Arial Narrow', sans-serif";ctx.textAlign="left";ctx.fillText("RED",x+10,railY-4);
@@ -2209,6 +2319,17 @@ module.exports = {
 
     function drawMatchBoardFrame(){
       var x=10,y=boardAreaTop+8,w=SW-20,h=boardAreaBot-boardAreaTop-16,c=12;
+      // 在线模式：棋盘边框以行动方颜色脉动，提示"谁的回合"
+      if(G.mode==="online" && G.online && !G.over){
+        var pulse = 0.5+0.5*Math.sin(G.beamPulseT*3);
+        var col = ownerColor(G.current,true);
+        var myTurn = G.current === G.online.myPlayer;
+        ctx.save();
+        ctx.globalAlpha = (myTurn ? 0.30 : 0.12) + (myTurn ? 0.30 : 0.08) * pulse;
+        ctx.strokeStyle=col;ctx.lineWidth=myTurn?4:2.5;
+        roundRect(x-2,y-2,w+4,h+4,14);ctx.stroke();
+        ctx.restore();
+      }
       ctx.strokeStyle="rgba(207,224,227,.72)";ctx.lineWidth=1;
       ctx.beginPath();ctx.moveTo(x,y+c);ctx.lineTo(x,y);ctx.lineTo(x+c,y);
       ctx.moveTo(x+w-c,y);ctx.lineTo(x+w,y);ctx.lineTo(x+w,y+c);
@@ -2222,26 +2343,65 @@ module.exports = {
 
     function drawStatus(){
       var y = SH - SAFE_BOT - btnAreaH - STATUS_H;
+      var isOnline = G.mode === "online" && G.online;
+      var myTurn = isOnline && G.current === G.online.myPlayer;
       var txt = "";
       var phaseLabel="READY";
+      var accent = G.busy ? "#f5d86e" : ownerColor(G.current,true);
       if(G.over){txt="本局已结束";phaseLabel="COMPLETE";}
-      else if(G.busy){txt="电脑正在计算光路…";phaseLabel="COMPUTE";}
-      else if(G.phase==="select"){txt=(G.mode==="pve"&&G.current===G.aiPlayer)?"":"选择棋子，或直接发射";phaseLabel="SELECT";}
+      else if(G.busy){
+        if(G.mode==="online"){
+          var dots = ".".repeat(1 + Math.floor(G.beamPulseT*2) % 3);
+          txt="等待对手行动"+dots;phaseLabel="WAITING";accent="#f5d86e";
+        }
+        else{txt="电脑正在计算光路…";phaseLabel="COMPUTE";accent="#f5d86e";}
+      }
+      else if(G.phase==="select"){
+        if(G.mode==="pve"&&G.current===G.aiPlayer) txt="";
+        else if(isOnline&&!myTurn) txt="";
+        else txt="选择棋子，或直接发射";
+        phaseLabel="SELECT";
+      }
       else if(G.phase==="move"){txt="移动到高亮格；棋子上方可旋转";phaseLabel="MOVE";}
       else if(G.phase==="fire"){txt="发射激光，或结束本回合";phaseLabel="FIRE";}
       ctx.fillStyle="rgba(14,23,29,.94)";ctx.fillRect(12,y+3,SW-24,STATUS_H-6);
-      ctx.strokeStyle="#31444d";ctx.lineWidth=1;ctx.strokeRect(12.5,y+3.5,SW-25,STATUS_H-7);
-      ctx.fillStyle=G.busy?"#f5d86e":ownerColor(G.current,true);ctx.fillRect(12,y+3,3,STATUS_H-6);
-      ctx.fillStyle="#708790";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.textAlign="left";ctx.textBaseline="middle";ctx.fillText(phaseLabel,23,y+STATUS_H/2);
-      ctx.fillStyle="#b9c7ca";ctx.font="500 11px 'PingFang SC', sans-serif";ctx.textAlign="right";ctx.fillText(txt,SW-22,y+STATUS_H/2);
+      ctx.strokeStyle= isOnline && !G.over ? accent : "#31444d";
+      ctx.globalAlpha = isOnline && !G.over ? (myTurn && !G.busy ? 0.9 : 0.4) : 1;
+      ctx.lineWidth = isOnline && !G.over && myTurn && !G.busy ? 1.8 : 1;
+      ctx.strokeRect(12.5,y+3.5,SW-25,STATUS_H-7);
+      ctx.globalAlpha=1;
+      // 左侧色条加宽，行动等待用琥珀色
+      ctx.fillStyle=accent;ctx.fillRect(12,y+3,4,STATUS_H-6);
+      // 脉动效果：我的回合时提示更抓眼
+      var pulse = 0.5+0.5*Math.sin(G.beamPulseT*4);
+      if(isOnline && myTurn && !G.busy && !G.over){
+        ctx.globalAlpha=0.25+0.3*pulse;
+        ctx.fillStyle=accent;ctx.fillRect(12,y+3,4,STATUS_H-6);
+        ctx.globalAlpha=1;
+      }
+      ctx.fillStyle= isOnline && myTurn && !G.busy ? accent : "#708790";
+      ctx.font="700 9px 'Arial Narrow', sans-serif";ctx.textAlign="left";ctx.textBaseline="middle";
+      ctx.fillText(phaseLabel,24,y+STATUS_H/2);
+      ctx.fillStyle = txt && (isOnline && (myTurn || G.busy)) ? "#f2f7f5" : "#b9c7ca";
+      ctx.font="700 12.5px 'PingFang SC', sans-serif";ctx.textAlign="right";
+      ctx.fillText(txt,SW-22,y+STATUS_H/2);
     }
 
     /* -------------------- 按钮构建 -------------------- */
     function buildActionButtons(){
       if(G.screen !== "playing" || G.over || G.busy) return;
       if(G.phase === "move"){
-        addBtn("取消选择", function(){ G.phase="select"; G.sel=-1; render(); }, "matchGhost", 1.15);
-        addBtn("视角归位", resetView, "matchGhost", 0.85);
+        var selP = G.sel >= 0 ? G.pieces[G.sel] : null;
+        if(selP && selP.alive){
+          if(selP.type === LASER){
+            addBtn("换向", doLaserToggle, "matchTurnEnd", 1);
+          } else if(selP.type !== KING){
+            addBtn("⟲ 左转", function(){ doRotate(3); }, "matchGhost", 0.95);
+            addBtn("⟳ 右转", function(){ doRotate(1); }, "matchGhost", 0.95);
+          }
+        }
+        addBtn("取消选择", function(){ G.phase="select"; G.sel=-1; render(); }, "matchGhost", 1);
+        addBtn("视角归位", resetView, "matchGhost", 0.7);
       }
       else if(G.phase === "fire"){
         addBtn("\u26A1 发射激光", fireLaser, "matchPrimary", 1.35);
@@ -2250,7 +2410,9 @@ module.exports = {
         if(G.drawOffer) addBtn("接受平局", declareDraw, "matchGhost", 0.8);
       }
       else if(G.phase === "select" && !G.busy){
-        if(!(G.mode==="pve" && G.current===G.aiPlayer)){
+        var _canAct = !(G.mode==="pve" && G.current===G.aiPlayer) &&
+                      !(G.mode==="online" && G.online && G.current!==G.online.myPlayer);
+        if(_canAct){
           addBtn("\u26A1 直接发射", directFire, "matchPrimary", 1.5);
         }
         addBtn("视角归位", resetView, "matchGhost", 0.85);
@@ -2281,22 +2443,27 @@ module.exports = {
       var p = G.sel >= 0 ? G.pieces[G.sel] : null;
       if(!p) return;
       p.orientation = (p.orientation + d) % 4;
+      G.lastAction = { kind:"rot", pi:G.sel, d:d };
       G.phase = "fire"; render();
     }
     function doLaserToggle(){
       var p = G.sel >= 0 ? G.pieces[G.sel] : null;
       if(!p) return;
       var dirs = LASER_DIRS[p.owner];
-      p.orientation = p.orientation === dirs[0] ? dirs[1] : dirs[0];
+      var newDir = p.orientation === dirs[0] ? dirs[1] : dirs[0];
+      p.orientation = newDir;
+      G.lastAction = { kind:"laserRot", pi:G.sel, dir:newDir };
       G.phase = "fire"; render();
     }
     function skipFire(){
+      if(G.mode === "online") sendOnlineTurnAction(false);
       G.path = null; G.eliminated = null; G.undoSnapshot = null;
       endTurn();
     }
     function directFire(){
       G.undoSnapshot = G.pieces.map(function(pp){ return Object.assign({}, pp); });
       G.phase = "fire";
+      if(G.mode === "online") G.lastAction = null;
       fireLaser();
     }
     function undoAction(){
@@ -2309,12 +2476,13 @@ module.exports = {
 
     /* -------------------- 视角重置 -------------------- */
     function resetView(){
-      camAnim = {fy:cam.yaw,fp:cam.pitch,fz:cam.zoom,ty:DEFAULT_YAW,tp:DEFAULT_PITCH,tz:1,t:0,dur:0.5};
+      camAnim = {fy:cam.yaw,fp:cam.pitch,fz:cam.zoom,ty:homeYaw,tp:DEFAULT_PITCH,tz:1,t:0,dur:0.5};
     }
 
     /* -------------------- 发射激光 -------------------- */
     function fireLaser(){
       if(G.phase !== "fire") return;
+      if(G.mode === "online" && G.online && G.current === G.online.myPlayer) sendOnlineTurnAction(true);
       var laser = getLaser(G.pieces, G.current);
       if(!laser){ endTurn(); return; }
       var sim;
@@ -2374,10 +2542,19 @@ module.exports = {
           G.playerPassiveTurns=Math.min(3,G.playerPassiveTurns+1);
         else G.playerPassiveTurns=0;
       }
-      G.current = 1 - G.current; G.sel = -1; G.phase = "select"; G.busy = false; G.undoSnapshot = null;
+      G.current = 1 - G.current; G.sel = -1; G.phase = "select"; G.undoSnapshot = null;
       G.turnStartPieces=G.pieces.map(copySnapshotValue);
+      if(G.mode === "online" && G.online && G.current !== G.online.myPlayer){
+        G.busy = true;
+      } else {
+        G.busy = false;
+      }
+      if(G.mode === "online" && G.online && !G.over && G.current === G.online.myPlayer)
+        showTurnBanner("轮到你了 · " + (G.current === 0 ? "红方行动" : "蓝方行动"));
       render();
       if(G.mode === "pve" && G.current === G.aiPlayer && !G.over) _setTrackTimeout(aiTurn, 360);
+      if(G.mode === "online" && G.online && G.online.simulated && G.current !== G.online.myPlayer && !G.over)
+        _setTrackTimeout(simulatedOpponentTurn, 600);
     }
 
     /* -------------------- AI 回合 -------------------- */
@@ -2477,7 +2654,11 @@ module.exports = {
         commitAiAction(anim.action);
       }
       G.aiAnim = null;
-      finishAiActionTurn();
+      if(anim.online){
+        finishOnlineActionTurn();
+      } else {
+        finishAiActionTurn();
+      }
     }
 
     function aiCanEliminateOpponent(){
@@ -2583,6 +2764,14 @@ module.exports = {
         drawConfirmReturnModal();
         return;
       }
+      if(G.modal === "onlineDisconnect"){
+        drawOnlineDisconnectModal();
+        return;
+      }
+      if(G.modal === "onlineUnavailable"){
+        drawOnlineUnavailableModal();
+        return;
+      }
       var rt=G.resultAnim?Math.max(0,Math.min(1,G.resultAnim.t/G.resultAnim.duration)):1;
       var cardT=Math.max(0,Math.min(1,(rt-.08)/.46));cardT=1-Math.pow(1-cardT,3);
       var detailT=Math.max(0,Math.min(1,(rt-.38)/.42));
@@ -2595,10 +2784,18 @@ module.exports = {
       var winnerColor=G.winner===0?"#ff4655":"#65d9ff";
       var title="",sub="",eyebrow="MATCH COMPLETE";
       if(G.modal === "win"){
-        var playerWon=G.mode!=="pve" || G.winner!==G.aiPlayer;
-        title=G.mode==="pve"?(playerWon?"光路胜利":"防线失守"):(G.winner===0?"红方获胜":"蓝方获胜");
-        sub=playerWon?"你的激光成功命中国王":"电脑激光突破防线并命中国王";
-        eyebrow=playerWon?"OPTICAL VICTORY":"SYSTEM DEFEAT";
+        var playerWon;
+        if(G.mode==="online") playerWon=G.online&&G.winner===G.online.myPlayer;
+        else playerWon=G.winner!==G.aiPlayer;
+        if(G.mode==="online"){
+          title=G.winner===0?"红方获胜":"蓝方获胜";
+          sub=playerWon?"你的激光成功命中国王":"对手激光突破防线并命中国王";
+          eyebrow=playerWon?"ONLINE VICTORY":"ONLINE DEFEAT";
+        } else {
+          title=playerWon?"光路胜利":"防线失守";
+          sub=playerWon?"你的激光成功命中国王":"电脑激光突破防线并命中国王";
+          eyebrow=playerWon?"OPTICAL VICTORY":"SYSTEM DEFEAT";
+        }
       } else if(G.modal === "draw"){
         title="光路僵持";sub="相同局面出现三次，本局判定为平局";winnerColor="#ffd34e";
         eyebrow="TACTICAL DRAW";
@@ -2629,10 +2826,24 @@ module.exports = {
       var sweep=Math.max(0,Math.min(1,rt/.5));
       ctx.globalAlpha=(1-sweep)*.9;ctx.strokeStyle="#fffdf2";ctx.lineWidth=2;ctx.shadowColor=winnerColor;ctx.shadowBlur=12;
       var sweepX=px-30+(pw+60)*sweep;ctx.beginPath();ctx.moveTo(sweepX-26,py+ph);ctx.lineTo(sweepX+26,py);ctx.stroke();ctx.shadowBlur=0;
-      BUTTONS = [];
-      if(rt>.58) BUTTONS.push({x:px+44,y:py+ph-58,w:pw-88,h:BTN_H,label:"再来一局",fn:restartMatch,style:"resultPrimary"});
-      for(var j=0;j<BUTTONS.length;j++) drawButton(BUTTONS[j]);
       ctx.restore();
+      BUTTONS = [];
+      if(rt>.58){
+        if(G.mode==="online"){
+          var bw2=(pw-88-BTN_GAP)/2;
+          BUTTONS.push({x:px+44,y:py+ph-58,w:bw2,h:BTN_H,label:"再来一局",fn:function(){
+            if(!(G.online&&G.online.simulated)) Online.sendFrame({phase:"rematch"});
+            rematchOnline();
+          },style:"resultPrimary"});
+          BUTTONS.push({x:px+44+bw2+BTN_GAP,y:py+ph-58,w:bw2,h:BTN_H,label:"返回设置",fn:function(){
+            if(!(G.online&&G.online.simulated)){try{Online.leaveRoom();}catch(e){}}
+            G.online=null;G.mode="pve";enterSetup();
+          },style:"matchGhost"});
+        } else {
+          BUTTONS.push({x:px+44,y:py+ph-58,w:pw-88,h:BTN_H,label:"再来一局",fn:restartMatch,style:"resultPrimary"});
+        }
+      }
+      for(var j=0;j<BUTTONS.length;j++) drawButton(BUTTONS[j]);
     }
 
     function drawRulesModal(){
@@ -2722,6 +2933,9 @@ module.exports = {
     var lastDrag = { x:0, y:0 };
     var DRAG_THRESHOLD = 15; // 单指移动超过此距离判定为拖动视角
 
+    var rulesLongPress = { active:false, startTime:0, triggered:false, hitArea:null };
+    var RULES_LONGPRESS_MS = 3000;
+
     function screenToCell(sx, sy){
       if(rendererMode === "ready" && webglRenderer){
         try { return webglRenderer.pick(sx, sy, webglCamera()); }
@@ -2793,6 +3007,15 @@ module.exports = {
           clickStart.y = ts[0].clientY;
           lastDrag.x = ts[0].clientX;
           lastDrag.y = ts[0].clientY;
+          if(G.screen === "setup" && rulesLongPress.hitArea){
+            var ha=rulesLongPress.hitArea;
+            if(ts[0].clientX>=ha.x && ts[0].clientX<=ha.x+ha.w &&
+               ts[0].clientY>=ha.y && ts[0].clientY<=ha.y+ha.h){
+              rulesLongPress.active=true;
+              rulesLongPress.startTime=Date.now();
+              rulesLongPress.triggered=false;
+            }
+          }
         }
       } catch(err) {}
     }
@@ -2833,6 +3056,9 @@ module.exports = {
           var dx = ts[0].clientX - lastDrag.x;
           var dy = ts[0].clientY - lastDrag.y;
           var moveDist = Math.sqrt(dx*dx + dy*dy);
+          if(rulesLongPress.active && moveDist > DRAG_THRESHOLD){
+            rulesLongPress.active = false;
+          }
           if(G.screen === "playing" && moveDist > DRAG_THRESHOLD){
             touchMode = "drag";
           }
@@ -2869,6 +3095,10 @@ module.exports = {
           var wasDrag = (touchMode === "drag");
           touchMode = "none";
           if(wasDrag) return; // 拖动结束，不处理点击
+          var wasTriggered = rulesLongPress.triggered;
+          rulesLongPress.active = false;
+          rulesLongPress.triggered = false;
+          if(wasTriggered) return; // 长按已触发在线对战，不处理点击
           var changed = (e && e.changedTouches) ? e.changedTouches : [];
           if(!changed.length) return;
           var t = changed[0];
@@ -2907,6 +3137,7 @@ module.exports = {
       if(G.modal || G.screen !== "playing") return;
       if(G.over || G.busy) return;
       if(G.mode === "pve" && G.current === G.aiPlayer) return;
+      if(G.mode === "online" && G.online && G.current !== G.online.myPlayer) return;
 
       var ob = hitOnBoard3D(x, y);
       if(ob && ob.fn){ ob.fn(); return; }
@@ -2920,6 +3151,7 @@ module.exports = {
         if(p && p.owner === G.current){
           G.undoSnapshot = G.pieces.map(function(pp){ return Object.assign({}, pp); });
           G.sel = G.pieces.indexOf(p);
+          G.lastAction = null;
           G.phase = "move";
           render();
         }
@@ -2939,8 +3171,8 @@ module.exports = {
           if(targets[i].r===targetRow && targets[i].c===targetCol){ tg = targets[i]; break; }
         }
         if(tg){
-          if(tg.swap){ var tp = pieceAt(G.pieces,targetRow,targetCol); var tr2=tp.row,tc2=tp.col; tp.row=selP.row;tp.col=selP.col; selP.row=tr2;selP.col=tc2; }
-          else { selP.row=targetRow;selP.col=targetCol; }
+          if(tg.swap){ var tp = pieceAt(G.pieces,targetRow,targetCol); var tr2=tp.row,tc2=tp.col; tp.row=selP.row;tp.col=selP.col; selP.row=tr2;selP.col=tc2; G.lastAction={kind:"swap",pi:G.sel,ti:G.pieces.indexOf(tp)}; }
+          else { selP.row=targetRow;selP.col=targetCol; G.lastAction={kind:"move",pi:G.sel,r:targetRow,c:targetCol}; }
           G.phase = "fire"; render();
         } else {
           var np=touchedPiece && touchedPiece.owner===G.current?touchedPiece:
@@ -2953,14 +3185,697 @@ module.exports = {
       }
     }
 
+    /* -------------------- 在线对战 -------------------- */
+
+    function startOnlineMatch(){
+      if(!Online.isAvailable()){
+        G.modal = "onlineUnavailable";
+        render();
+        return;
+      }
+      G.screen = "online_wait";
+      G.online = { state:"login", isHost:true, myPlayer:-1, accessInfo:null, shared:false };
+      render();
+      Online.login(function(err){
+        if(err){ G.online.state="error"; G.online.errorMsg="登录游戏服务失败"; render(); return; }
+        G.online.state = "creating";
+        render();
+        Online.createRoom(function(err2, accessInfo){
+          if(err2){ G.online.state="error"; G.online.errorMsg="创建房间失败："+(err2.errMsg||err2.message||""); render(); return; }
+          G.online.accessInfo = accessInfo;
+          G.online.state = "waiting";
+          render();
+          Online.shareInvite(accessInfo);
+          Online.onRoomInfoChange(function(roomInfo){
+            var members = (roomInfo && roomInfo.memberList) || [];
+            if(members.length >= 2 && G.online && G.online.state === "waiting"){
+              G.online.state = "starting";
+              clearMatchVisualState();
+              setupFrameSync();
+              Online.startGame(function(err3){
+                if(err3){ G.online.state="error"; G.online.errorMsg="开始游戏失败"; render(); return; }
+                startRps();
+              });
+            }
+          });
+        });
+      });
+    }
+
+    function joinOnlineMatch(accessInfo){
+      if(!Online.isAvailable()){
+        G.modal = "onlineUnavailable";
+        render();
+        return;
+      }
+      G.screen = "online_join";
+      G.online = { state:"login", isHost:false, myPlayer:-1, accessInfo:accessInfo };
+      render();
+      Online.login(function(err){
+        if(err){ G.online.state="error"; G.online.errorMsg="登录游戏服务失败"; render(); return; }
+        G.online.state = "joining";
+        render();
+        Online.joinRoom(accessInfo, function(err2){
+          if(err2){ G.online.state="error"; G.online.errorMsg="加入房间失败："+(err2.errMsg||err2.message||""); render(); return; }
+          G.online.state = "starting";
+          render();
+          setupFrameSync();
+          Online.startGame(function(err3){
+            if(err3){ G.online.state="error"; G.online.errorMsg="开始游戏失败"; render(); return; }
+            startRps();
+          });
+        });
+      });
+    }
+
+    function setupFrameSync(){
+      var playScreens = {"playing":1,"rps":1,"formation_select":1,"formation_wait":1};
+      Online.onFrame(function(data){
+        handleOnlineFrame(data);
+      });
+      Online.onDisconnect(function(){
+        if(playScreens[G.screen]){
+          G.modal = "onlineDisconnect";
+          G.onlineDisconnectReason = "network";
+          render();
+        }
+      });
+      Online.onRoomInfoChange(function(roomInfo){
+        var members = (roomInfo && roomInfo.memberList) || [];
+        if(members.length < 2 && playScreens[G.screen]){
+          G.modal = "onlineDisconnect";
+          G.onlineDisconnectReason = "left";
+          render();
+        }
+      });
+    }
+
+    /* -------------------- 石头剪刀布 -------------------- */
+
+    function startRps(){
+      G.screen = "rps";
+      G.rpsMyChoice = null;
+      G.rpsOpponentChoice = null;
+      G.rpsResult = null;
+      render();
+    }
+
+    function handleRpsChoice(choice){
+      if(G.rpsMyChoice) return;
+      G.rpsMyChoice = choice;
+      console.log("[RPS] my choice:", choice, "simulated:", !!(G.online && G.online.simulated));
+      if(!(G.online && G.online.simulated)) Online.sendFrame({ phase:"rps", choice:choice });
+      render();
+      checkRpsResult();
+      if(G.online && G.online.simulated && !G.rpsOpponentChoice){
+        _setTrackTimeout(function(){
+          G.rpsOpponentChoice = ["rock","scissors","paper"][Math.floor(Math.random()*3)];
+          checkRpsResult();
+        }, 800 + Math.random()*700);
+      }
+    }
+
+    function checkRpsResult(){
+      if(!G.rpsMyChoice || !G.rpsOpponentChoice) return;
+      var my = G.rpsMyChoice, opp = G.rpsOpponentChoice;
+      if(my === opp){
+        G.rpsResult = "tie";
+        render();
+        _setTrackTimeout(function(){
+          G.rpsMyChoice = null;
+          G.rpsOpponentChoice = null;
+          G.rpsResult = null;
+          render();
+        }, 2000);
+        return;
+      }
+      var win = (my === "rock" && opp === "scissors") ||
+                (my === "scissors" && opp === "paper") ||
+                (my === "paper" && opp === "rock");
+      if(win){
+        G.online.myPlayer = 0;
+        G.rpsResult = "win";
+      } else {
+        G.online.myPlayer = 1;
+        G.rpsResult = "lose";
+      }
+      render();
+      _setTrackTimeout(function(){
+        if(G.online.myPlayer === 0){
+          G.screen = "formation_select";
+          G.formationIdx = 0;
+          G.layoutIdx = 0;
+          G.pieces = makeInitialPieces(0);
+          setSetupCamera();
+          render();
+        } else {
+          G.screen = "formation_wait";
+          render();
+          if(G.online.simulated){
+            _setTrackTimeout(function(){
+              var idx = Math.floor(Math.random() * LAYOUTS.length);
+              beginOnlineMatch(idx);
+            }, 1500);
+          }
+        }
+      }, 2500);
+    }
+
+    function beginOnlineMatch(layoutIdx){
+      G.mode = "online";
+      G.screen = "playing";
+      G.lockedLayoutIdx = (layoutIdx !== undefined) ? layoutIdx : G.layoutIdx;
+      G.lockedDifficulty = G.difficulty;
+      resetMatchState(makeInitialPieces(G.lockedLayoutIdx));
+      // 蓝方主视角：棋盘旋转180°，动画过渡
+      homeYaw = (G.online && G.online.myPlayer === 1) ? Math.PI : DEFAULT_YAW;
+      if(Math.abs(homeYaw - cam.yaw) > 0.01){
+        camAnim = {fy:cam.yaw,fp:cam.pitch,fz:cam.zoom||1,ty:homeYaw,tp:DEFAULT_PITCH,tz:1,t:0,dur:0.9};
+      } else {
+        setMatchCamera();
+      }
+      if(G.online.myPlayer !== G.current) G.busy = true;
+      else showTurnBanner("轮到你了 · " + (G.current === 0 ? "红方先手" : "蓝方先手"));
+      render();
+      if(G.online && G.online.simulated && G.online.myPlayer !== G.current)
+        _setTrackTimeout(simulatedOpponentTurn, 800);
+    }
+
+    function rematchOnline(){
+      G.modal = null;
+      G.over = false; G.winner = -1; G.busy = false;
+      G.resultAnim = null;
+      resetMatchState(makeInitialPieces(G.lockedLayoutIdx));
+      homeYaw = (G.online && G.online.myPlayer === 1) ? Math.PI : DEFAULT_YAW;
+      setMatchCamera();
+      if(G.online.myPlayer !== G.current) G.busy = true;
+      else showTurnBanner("再来一局 · " + (G.current === 0 ? "红方先手" : "蓝方先手"));
+      render();
+      if(G.online && G.online.simulated && G.online.myPlayer !== G.current)
+        _setTrackTimeout(simulatedOpponentTurn, 800);
+    }
+
+    /* -------------------- 回合横幅 -------------------- */
+
+    var turnBanner = { text: "", t: -1 };
+
+    function showTurnBanner(text){
+      turnBanner.text = text;
+      turnBanner.t = 0;
+    }
+
+    function updateTurnBanner(dt){
+      if(turnBanner.t < 0) return;
+      turnBanner.t += dt || 0;
+      if(turnBanner.t > 2.2) turnBanner.t = -1;
+    }
+
+    function drawTurnBanner(){
+      if(turnBanner.t < 0 || !turnBanner.text) return;
+      var t = turnBanner.t;
+      var alpha = t < 0.25 ? t / 0.25 : (t > 1.6 ? Math.max(0, 1 - (t - 1.6) / 0.6) : 1);
+      var y = boardAreaTop + (boardAreaBot - boardAreaTop) * 0.42;
+      var rise = (1 - Math.min(1, t / 0.25)) * 18;
+      var col = ownerColor(G.current, true);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      var fs = 26;
+      ctx.font = "800 " + fs + "px 'PingFang SC', sans-serif";
+      var tw = ctx.measureText(turnBanner.text).width;
+      var bw = tw + 44, bh = 52;
+      var bx = SW / 2 - bw / 2, by = y - bh / 2 + rise;
+      ctx.fillStyle = "rgba(8,13,20,.88)";
+      roundRect(bx, by, bw, bh, 12);
+      ctx.fill();
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 2;
+      roundRect(bx, by, bw, bh, 12);
+      ctx.stroke();
+      var pulse = 0.5 + 0.5 * Math.sin(G.beamPulseT * 6);
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.arc(bx + 18, by + bh / 2, 5 + pulse * 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#eef4f2";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(turnBanner.text, bx + 32, by + bh / 2 + 1);
+      ctx.restore();
+    }
+
+    /* -------------------- 在线帧处理 -------------------- */
+
+    function handleOnlineFrame(data){
+      if(!data) return;
+      console.log("[Online] handleOnlineFrame:", JSON.stringify(data));
+      if(data.phase === "rps"){
+        console.log("[RPS] opponent choice received:", data.choice);
+        G.rpsOpponentChoice = data.choice;
+        checkRpsResult();
+        return;
+      }
+      if(data.phase === "turn"){
+        applyOnlineAction(data);
+        return;
+      }
+      if(data.phase === "rematch"){
+        console.log("[Online] rematch request received");
+        rematchOnline();
+        return;
+      }
+      if(data.phase === "formation"){
+        console.log("[Online] formation received:", data.index);
+        beginOnlineMatch(data.index);
+        return;
+      }
+    }
+
+    function applyOnlineAction(data){
+      if(G.screen !== "playing" || G.over) return;
+      G.busy = true;
+      G.sel = -1;
+      G.onlinePendingFire = data.fire;
+      if(data.action && data.action.kind !== "skip"){
+        try {
+          G.aiAnim = createAiAnimation(data.action);
+          G.aiAnim.online = true;
+          if(data.action.kind === "move"){
+            G.actionNotice = "对手移动：" +
+              boardCellName(G.aiAnim.fromRow, G.aiAnim.fromCol) + " → " +
+              boardCellName(G.aiAnim.toRow, G.aiAnim.toCol);
+          } else if(data.action.kind === "rot" || data.action.kind === "laserRot"){
+            G.actionNotice = "对手旋转棋子";
+          } else if(data.action.kind === "swap"){
+            G.actionNotice = "对手互换棋子";
+          }
+          render();
+        } catch(e){
+          commitAiAction(data.action);
+          G.aiAnim = null;
+          finishOnlineActionTurn();
+        }
+      } else {
+        G.aiAnim = null;
+        G.actionNotice = data.fire ? "对手发射激光" : "对手结束回合";
+        G.phase = "fire";
+        render();
+        _setTrackTimeout(function(){
+          if(data.fire) fireLaser();
+          else {
+            G.path = null;
+            G.eliminated = null;
+            G.undoSnapshot = null;
+            endTurn();
+          }
+        }, 500);
+      }
+    }
+
+    function finishOnlineActionTurn(){
+      G.phase = "fire";
+      if(G.onlinePendingFire){
+        G.onlinePendingFire = null;
+        fireLaser();
+      } else {
+        G.onlinePendingFire = null;
+        G.path = null;
+        G.eliminated = null;
+        G.undoSnapshot = null;
+        endTurn();
+      }
+    }
+
+    function sendOnlineTurnAction(fire){
+      if(G.mode !== "online") return;
+      if(!(G.online && G.online.simulated)) Online.sendFrame({ phase:"turn", action:G.lastAction, fire:fire });
+      G.lastAction = null;
+    }
+
+    function cancelOnline(){
+      if(G.online && G.online.simulated){
+        G.online = null;
+        G.mode = "pve";
+        enterSetup();
+        return;
+      }
+      Online.leaveRoom();
+      G.online = null;
+      G.mode = "pve";
+      enterSetup();
+    }
+
+    function startSimulatedOnline(){
+      G.online = { state:"simulated", isHost:true, myPlayer:-1, simulated:true };
+      startRps();
+    }
+
+    function simulatedOpponentTurn(){
+      if(G.over || G.screen !== "playing") return;
+      var opp = G.current;
+      var act;
+      try { act = aiChoose(G.pieces, opp, G.lockedDifficulty || "normal", 0); }
+      catch(e) { act = { kind:"skip" }; }
+      var fire = false;
+      if(act && act.kind !== "skip"){
+        var snap = G.pieces.map(function(p){ return Object.assign({}, p); });
+        commitAiAction(act);
+        try {
+          var laser = getLaser(G.pieces, opp);
+          if(laser){
+            var sim = simulateLaser(G.pieces, laser);
+            fire = !!(sim.eliminated && sim.eliminated.owner !== opp);
+          }
+        } catch(e2) {}
+        G.pieces = snap;
+      }
+      applyOnlineAction({ phase:"turn", action:act, fire:fire });
+    }
+
+    /* -------------------- 在线对战屏幕渲染 -------------------- */
+
+    function drawOnlineWaitScreen(){
+      var bg = ctx.createLinearGradient(0, 0, 0, SH);
+      bg.addColorStop(0, "#11151b"); bg.addColorStop(1, "#090c10");
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, SW, SH);
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      var stateLabels = {
+        login: { label:"正在登录", sub:"连接游戏服务" },
+        creating: { label:"正在创建房间", sub:"准备对战房间" },
+        waiting: { label:G.online.shared ? "等待好友加入" : "房间已创建", sub:G.online.shared ? "已发送邀请，等待对方加入" : "点击下方按钮邀请好友" },
+        starting: { label:"对手已加入", sub:"正在同步对局" },
+        error: { label:"出错", sub:G.online.errorMsg || "未知错误" }
+      };
+      var info = stateLabels[G.online.state] || { label:"", sub:"" };
+      var cardW = Math.min(SW-40, 300), cardH = 240;
+      var cardX = (SW-cardW)/2, cardY = SH/2 - cardH/2 - 20;
+      ctx.fillStyle = "#151c31"; roundRect(cardX, cardY, cardW, cardH, 16); ctx.fill();
+      ctx.strokeStyle = "#334263"; ctx.lineWidth = 1; ctx.stroke();
+      if(G.online.state === "error") ctx.strokeStyle = "#ff5a6e";
+      else if(G.online.state === "waiting") ctx.strokeStyle = "#63c9ff";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(cardX+16, cardY); ctx.lineTo(cardX+cardW-16, cardY);
+      ctx.strokeStyle = G.online.state === "error" ? "#ff5a6e" : "#63c9ff";
+      ctx.lineWidth = 2; ctx.stroke();
+      if(G.online.state === "waiting"){
+        var pulse = 0.5 + 0.5 * Math.sin(Date.now() / 600);
+        ctx.globalAlpha = 0.15 + 0.25 * pulse;
+        ctx.fillStyle = "#63c9ff";
+        ctx.fillRect(cardX+16, cardY, cardW-32, 3);
+        ctx.globalAlpha = 1;
+      }
+      var iconY = cardY + 50;
+      if(G.online.state === "error"){
+        ctx.fillStyle = "#ff5a6e"; ctx.font = "32px sans-serif";
+        ctx.fillText("✕", SW/2, iconY);
+      } else if(G.online.state === "waiting"){
+        var dotR = 6, dotSpacing = 18;
+        for(var di = 0; di < 3; di++){
+          var dp = 0.3 + 0.7 * Math.max(0, Math.sin(Date.now() / 300 - di * 0.6));
+          ctx.globalAlpha = dp;
+          ctx.fillStyle = "#63c9ff";
+          ctx.beginPath(); ctx.arc(SW/2 - dotSpacing + di * dotSpacing, iconY, dotR, 0, Math.PI*2); ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      } else {
+        var sp = 0.4 + 0.6 * Math.abs(Math.sin(Date.now() / 500));
+        ctx.globalAlpha = sp;
+        ctx.fillStyle = "#5ccbff"; ctx.font = "28px sans-serif";
+        ctx.fillText("◌", SW/2, iconY);
+        ctx.globalAlpha = 1;
+      }
+      ctx.fillStyle = "#f4f7ff"; ctx.font = "700 18px 'PingFang SC', sans-serif";
+      ctx.fillText(info.label, SW/2, cardY + 100);
+      ctx.fillStyle = "#8998a1"; ctx.font = "12px 'PingFang SC', sans-serif";
+      ctx.fillText(info.sub, SW/2, cardY + 128);
+      if(G.online.state === "waiting" && G.online.accessInfo){
+        if(!G.online.shared){
+          BUTTONS.push({ x:SW/2-80, y:cardY+cardH-58, w:160, h:42, label:"邀请好友", fn:function(){
+            G.online.shared = true;
+            Online.triggerShare(G.online.accessInfo);
+            render();
+          }, style:"setupOnline" });
+        } else {
+          ctx.fillStyle = "rgba(16,27,34,0.6)"; roundRect(SW/2-80, cardY+cardH-58, 160, 42, 8); ctx.fill();
+          ctx.strokeStyle = "#2a3a4a"; ctx.lineWidth = 1; ctx.stroke();
+          ctx.fillStyle = "#5a6a74"; ctx.font = "600 13px 'PingFang SC', sans-serif";
+          ctx.fillText("等待好友加入...", SW/2, cardY+cardH-37);
+          BUTTONS.push({ x:SW/2-80, y:cardY+cardH-58, w:160, h:42, label:"", fn:function(){
+            Online.triggerShare(G.online.accessInfo);
+          }, style:"ghost" });
+        }
+      }
+      if(G.online.state === "error"){
+        BUTTONS.push({ x:SW/2-60, y:cardY+cardH-52, w:120, h:40, label:"返回", fn:cancelOnline, style:"ghost" });
+      } else {
+        BUTTONS.push({ x:SW/2-70, y:SH-SAFE_BOT-48, w:140, h:40, label:"返回首页", fn:function(){
+          G.screen = "setup";
+          render();
+        }, style:"ghost" });
+      }
+      for(var i=0;i<BUTTONS.length;i++) drawButton(BUTTONS[i]);
+    }
+
+    function drawOnlineJoinScreen(){
+      var bg = ctx.createLinearGradient(0, 0, 0, SH);
+      bg.addColorStop(0, "#11151b"); bg.addColorStop(1, "#090c10");
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, SW, SH);
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      var label = "", sub = "";
+      if(G.online){
+        if(G.online.state === "login"){ label = "正在登录..."; sub = "连接游戏服务"; }
+        else if(G.online.state === "joining"){ label = "正在加入房间..."; sub = "连接对手"; }
+        else if(G.online.state === "starting"){ label = "准备开始..."; sub = "同步对局"; }
+        else if(G.online.state === "error"){ label = "出错"; sub = G.online.errorMsg || "未知错误"; }
+      }
+      ctx.fillStyle = "#f2eee5"; ctx.font = "700 20px 'PingFang SC', sans-serif";
+      ctx.fillText(label, SW/2, SH/2 - 30);
+      ctx.fillStyle = "#8998a1"; ctx.font = "12px 'PingFang SC', sans-serif";
+      ctx.fillText(sub, SW/2, SH/2 + 2);
+      if(G.online && G.online.state !== "error"){
+        var dots = ".".repeat(Math.floor(Date.now() / 400) % 4);
+        ctx.fillStyle = "#5ccbff"; ctx.font = "14px sans-serif";
+        ctx.fillText(dots, SW/2, SH/2 + 30);
+      }
+      BUTTONS.push({ x:SW/2-60, y:SH-SAFE_BOT-50, w:120, h:42, label:"取消", fn:cancelOnline, style:"ghost" });
+      for(var i=0;i<BUTTONS.length;i++) drawButton(BUTTONS[i]);
+    }
+
+    function drawRpsScreen(){
+      var bg = ctx.createLinearGradient(0, 0, 0, SH);
+      bg.addColorStop(0, "#11151b"); bg.addColorStop(0.5, "#0d1117"); bg.addColorStop(1, "#090c10");
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, SW, SH);
+      ctx.save();
+      ctx.strokeStyle = "rgba(174,197,209,0.055)"; ctx.lineWidth = 1;
+      for(var gx=16;gx<SW;gx+=24){ ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,SH);ctx.stroke(); }
+      for(var gy=SAFE_TOP;gy<SH;gy+=24){ ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(SW,gy);ctx.stroke(); }
+      ctx.restore();
+      ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+      ctx.fillStyle = "#a9c6d3"; ctx.font = "600 9px 'Arial Narrow', sans-serif";
+      ctx.fillText("ROCK · PAPER · SCISSORS", SW/2, SAFE_TOP + 20);
+      ctx.fillStyle = "#f2eee5"; ctx.font = "800 24px 'PingFang SC', sans-serif";
+      ctx.fillText("石头·剪刀·布", SW/2, SAFE_TOP + 52);
+      ctx.fillStyle = "#8998a1"; ctx.font = "11px 'PingFang SC', sans-serif";
+      ctx.fillText("胜者执红方，先手行动", SW/2, SAFE_TOP + 74);
+      var railY = SAFE_TOP + 88;
+      var rail = ctx.createLinearGradient(16, railY, SW-16, railY);
+      rail.addColorStop(0, "#ff4d45"); rail.addColorStop(0.48, "#ff4d45");
+      rail.addColorStop(0.52, "#62c8ff"); rail.addColorStop(1, "#62c8ff");
+      ctx.strokeStyle = rail; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(16, railY); ctx.lineTo(SW-16, railY); ctx.stroke();
+      if(G.rpsResult) drawRpsResult();
+      else if(G.rpsMyChoice) drawRpsWaiting();
+      else drawRpsButtons();
+    }
+
+    function drawRpsButtons(){
+      var choices = [
+        { key:"rock", label:"石头", icon:"\u270A" },
+        { key:"scissors", label:"剪刀", icon:"\u270C" },
+        { key:"paper", label:"布", icon:"\u270B" }
+      ];
+      var margin = 20, gap = 12;
+      var w = (SW - margin*2 - gap*2) / 3;
+      var h = 80;
+      var y = SH/2 - h/2;
+      for(var i=0;i<choices.length;i++){
+        var x = margin + i*(w+gap);
+        var c = choices[i];
+        BUTTONS.push({
+          x:x, y:y, w:w, h:h, label:c.label, icon:c.icon,
+          fn:(function(choice){ return function(){ handleRpsChoice(choice); }; })(c.key),
+          style:"rps"
+        });
+      }
+      ctx.fillStyle = "#8998a1"; ctx.font = "12px 'PingFang SC', sans-serif";
+      ctx.textAlign = "center"; ctx.textBaseline = "top";
+      ctx.fillText("选择你的手势", SW/2, y + h + 24);
+      for(var j=0;j<BUTTONS.length;j++) drawButton(BUTTONS[j]);
+    }
+
+    function drawRpsWaiting(){
+      var labels = { rock:"石头", scissors:"剪刀", paper:"布" };
+      var icons = { rock:"\u270A", scissors:"\u270C", paper:"\u270B" };
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillStyle = "#f2eee5"; ctx.font = "48px sans-serif";
+      ctx.fillText(icons[G.rpsMyChoice], SW/2, SH/2 - 20);
+      ctx.fillStyle = "#8998a1"; ctx.font = "14px 'PingFang SC', sans-serif";
+      ctx.fillText("你选择了 " + labels[G.rpsMyChoice], SW/2, SH/2 + 30);
+      var dots = ".".repeat(Math.floor(Date.now() / 400) % 4);
+      ctx.fillStyle = "#5ccbff"; ctx.font = "12px 'PingFang SC', sans-serif";
+      ctx.fillText("等待对方选择" + dots, SW/2, SH/2 + 56);
+    }
+
+    function drawRpsResult(){
+      var labels = { rock:"石头", scissors:"剪刀", paper:"布" };
+      var icons = { rock:"\u270A", scissors:"\u270C", paper:"\u270B" };
+      var cy = SH/2 - 30;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillStyle = G.rpsResult === "win" ? "#ff4a4a" : "#3a8aff";
+      ctx.font = "36px sans-serif";
+      ctx.fillText(icons[G.rpsMyChoice], SW*0.3, cy);
+      ctx.fillStyle = "#8998a1"; ctx.font = "11px 'PingFang SC', sans-serif";
+      ctx.fillText("你", SW*0.3, cy + 30);
+      ctx.fillStyle = "#66747d"; ctx.font = "700 16px sans-serif";
+      ctx.fillText("VS", SW/2, cy);
+      ctx.fillStyle = G.rpsResult === "win" ? "#3a8aff" : "#ff4a4a";
+      ctx.font = "36px sans-serif";
+      ctx.fillText(icons[G.rpsOpponentChoice], SW*0.7, cy);
+      ctx.fillStyle = "#8998a1"; ctx.font = "11px 'PingFang SC', sans-serif";
+      ctx.fillText("对手", SW*0.7, cy + 30);
+      if(G.rpsResult === "win"){
+        ctx.fillStyle = "#ff4a4a"; ctx.font = "700 18px 'PingFang SC', sans-serif";
+        ctx.fillText("你赢了！你是红方，先手", SW/2, cy + 70);
+      } else if(G.rpsResult === "lose"){
+        ctx.fillStyle = "#3a8aff"; ctx.font = "700 18px 'PingFang SC', sans-serif";
+        ctx.fillText("你输了！你是蓝方，后手", SW/2, cy + 70);
+      } else {
+        ctx.fillStyle = "#ffd34e"; ctx.font = "700 18px 'PingFang SC', sans-serif";
+        ctx.fillText("平局！再来一次", SW/2, cy + 70);
+      }
+    }
+
+    function drawFormationSelectScreen(){
+      G.layoutIdx = G.formationIdx;
+      if(!G.pieces || G.pieces.length === 0) G.pieces = makeInitialPieces(G.layoutIdx);
+      var setupY=Math.round(SH*0.55)+1;
+      drawSetupBackground();
+      drawSetupHeader();
+      drawPreviewFrame(setupY);
+      if(!drawWebGLBoard()){
+        drawBoard3D();drawPieces3D();
+        if(rendererMode==="loading"){
+          ctx.fillStyle="rgba(8,12,16,0.82)";ctx.fillRect(12,boardAreaTop,SW-24,24);
+          ctx.fillStyle="#a9c6d3";ctx.font="10px 'PingFang SC', sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";
+          ctx.fillText("正在校准 3D 阵型…",SW/2,boardAreaTop+12);
+        }
+      }
+      drawFormationRail(setupY);
+      var hintTop=setupY+94, margin=16;
+      ctx.fillStyle="#f2eee5";ctx.font="600 10px 'PingFang SC', sans-serif";ctx.textAlign="left";ctx.textBaseline="alphabetic";
+      ctx.fillText("你赢得了先手选择权",margin,hintTop);
+      ctx.fillStyle="#6f828b";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.fillText("PRIORITY PICK",margin+96,hintTop);
+      ctx.fillStyle="#63c9ff";ctx.font="10px 'PingFang SC', sans-serif";
+      ctx.fillText("选择阵型后点击开始对战，对手将等待你的决定",margin,hintTop+16);
+      var actionY=Math.min(setupY+199,SH-SAFE_BOT-48);
+      BUTTONS.push({
+        x:margin, y:actionY, w:SW-margin*2, h:46,
+        label:"开始对战 · " + LAYOUTS[G.formationIdx].name,
+        meta:"FORMATION SELECT",
+        fn:function(){
+          if(!(G.online && G.online.simulated))
+            Online.sendFrame({ phase:"formation", index:G.formationIdx });
+          beginOnlineMatch(G.formationIdx);
+        }, style:"setupOnline"
+      });
+      for(var j=0;j<BUTTONS.length;j++) drawButton(BUTTONS[j]);
+    }
+
+    function drawFormationWaitScreen(){
+      var bg = ctx.createLinearGradient(0, 0, 0, SH);
+      bg.addColorStop(0, "#11151b"); bg.addColorStop(1, "#090c10");
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, SW, SH);
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      var cardW = Math.min(SW-40, 300), cardH = 200;
+      var cardX = (SW-cardW)/2, cardY = SH/2 - cardH/2 - 20;
+      ctx.fillStyle = "#151c31"; roundRect(cardX, cardY, cardW, cardH, 16); ctx.fill();
+      ctx.strokeStyle = "#334263"; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = "#63c9ff"; ctx.fillRect(cardX+16, cardY, cardW-32, 3);
+      var dotR = 6, dotSpacing = 18, dotY = cardY + 56;
+      for(var di = 0; di < 3; di++){
+        var dp = 0.3 + 0.7 * Math.max(0, Math.sin(Date.now() / 300 - di * 0.6));
+        ctx.globalAlpha = dp;
+        ctx.fillStyle = "#63c9ff";
+        ctx.beginPath(); ctx.arc(SW/2 - dotSpacing + di * dotSpacing, dotY, dotR, 0, Math.PI*2); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = "#f4f7ff"; ctx.font = "700 18px 'PingFang SC', sans-serif";
+      ctx.fillText("等待对手选择阵型", SW/2, cardY + 100);
+      ctx.fillStyle = "#8998a1"; ctx.font = "12px 'PingFang SC', sans-serif";
+      ctx.fillText("对方正在选择对战阵型...", SW/2, cardY + 128);
+      BUTTONS.push({ x:SW/2-60, y:SH-SAFE_BOT-48, w:120, h:40, label:"取消", fn:cancelOnline, style:"ghost" });
+      for(var j=0;j<BUTTONS.length;j++) drawButton(BUTTONS[j]);
+    }
+
+    function drawOnlineDisconnectModal(){
+      ctx.fillStyle = "rgba(6,9,20,0.88)"; ctx.fillRect(0, 0, SW, SH);
+      var pw = Math.min(SW-40, 320), ph = 200;
+      var px = (SW-pw)/2, py = (SH-ph)/2;
+      ctx.fillStyle = "#1a2138"; roundRect(px, py, pw, ph, 16); ctx.fill();
+      ctx.strokeStyle = "#4b5876"; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = "#f4f7ff"; ctx.font = "700 20px sans-serif";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      var isLeft = G.onlineDisconnectReason === "left";
+      ctx.fillText(isLeft ? "对手已退出" : "对手断线", SW/2, py + 54);
+      ctx.fillStyle = "#ff9ba7"; ctx.font = "14px sans-serif";
+      ctx.fillText(isLeft ? "对方离开了房间，对局结束。" : "对方已断开连接，对局结束。", SW/2, py + 94);
+      BUTTONS = [{
+        x:px+20, y:py+ph-56, w:pw-40, h:42,
+        label:"返回设置", fn:function(){
+          G.modal = null;
+          try{Online.leaveRoom();}catch(e){}
+          G.online = null;
+          G.mode = "pve";
+          enterSetup();
+        }, style:"primary"
+      }];
+      drawButton(BUTTONS[0]);
+    }
+
+    function drawOnlineUnavailableModal(){
+      ctx.fillStyle = "rgba(6,9,20,0.88)"; ctx.fillRect(0, 0, SW, SH);
+      var pw = Math.min(SW-40, 320), ph = 220;
+      var px = (SW-pw)/2, py = (SH-ph)/2;
+      ctx.fillStyle = "#1a2138"; roundRect(px, py, pw, ph, 16); ctx.fill();
+      ctx.strokeStyle = "#4b5876"; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = "#f4f7ff"; ctx.font = "700 18px sans-serif";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("在线服务不可用", SW/2, py + 48);
+      ctx.fillStyle = "#9db0b7"; ctx.font = "13px 'PingFang SC', sans-serif";
+      ctx.fillText("帧同步需要在真机预览环境下使用。", SW/2, py + 78);
+      ctx.fillText("可使用模拟模式测试在线对战流程。", SW/2, py + 98);
+      BUTTONS = [
+        { x:px+20, y:py+ph-56, w:(pw-52)/2, h:42, label:"返回",
+          fn:function(){ G.modal=null; enterSetup(); }, style:"ghost" },
+        { x:px+pw/2+6, y:py+ph-56, w:(pw-52)/2, h:42, label:"模拟测试",
+          fn:function(){ G.modal=null; startSimulatedOnline(); }, style:"primary" }
+      ];
+      for(var i=0;i<BUTTONS.length;i++) drawButton(BUTTONS[i]);
+    }
+
     /* -------------------- 启动 -------------------- */
     enterSetup();
     initWebGLRenderer();
+
+    if (platform && platform.launchOptions) {
+      var _roomInfo = Online.getLaunchRoomInfo(platform.launchOptions);
+      if (_roomInfo) joinOnlineMatch(_roomInfo);
+    }
 
     /* -------------------- 模块接口 -------------------- */
     return {
       update: function(dt){
         G.beamPulseT += Math.max(0, dt || 0);
+        updateTurnBanner(dt);
         if(camAnim){
           camAnim.t += dt / camAnim.dur;
           if(camAnim.t >= 1){
@@ -2979,20 +3894,61 @@ module.exports = {
         updateParticles(dt);
         updateKillAnimation(dt);
         updateResultAnimation(dt);
+        if(rulesLongPress.active && !rulesLongPress.triggered &&
+           Date.now()-rulesLongPress.startTime >= RULES_LONGPRESS_MS){
+          rulesLongPress.triggered=true;
+          rulesLongPress.active=false;
+          startOnlineMatch();
+        }
       },
       render: function(){ render(); },
       onTouchStart: function(e){ handleTouchStart(e); },
       onTouchMove: function(e){ handleTouchMove(e); },
       onTouchEnd: function(e){ handleTouchEnd(e); },
       onBack: function(){
+        if(G.screen === "online_wait" || G.screen === "online_join" || G.screen === "rps"){
+          cancelOnline();
+          return true;
+        }
         if(G.screen !== "playing") return false;
         requestReturnToSetup();
         return true;
       },
+      onShow: function(options){
+        if(G.online) return;
+        var query = (options && options.query) || {};
+        if(!query.online){
+          try {
+            var enterOpts = wx.getEnterOptionsSync ? wx.getEnterOptionsSync() : null;
+            if(enterOpts && enterOpts.query) query = enterOpts.query;
+          } catch(e) {}
+        }
+        if(query.online === "1" || query.online === 1){
+          var room = query.room ? decodeURIComponent(query.room) : null;
+          if(room){
+            if(G.screen === "playing" || G.screen === "setup"){
+              clearMatchVisualState();
+            }
+            joinOnlineMatch(room);
+          }
+        }
+      },
       showBack: function(){
-        return G.screen === "playing";
+        return G.screen === "playing" || G.screen === "online_wait" ||
+               G.screen === "online_join" || G.screen === "rps";
       },
       cameraControl: function(dx, dy){ externalCameraControl(dx, dy); },
+      exit: function(){
+        if(G.online || G.mode === "online"){
+          try { Online.leaveRoom(); } catch(e) {}
+          G.online = null;
+          G.mode = "pve";
+        }
+        rendererAlive = false;
+        for(var i=0;i<_timeouts.length;i++) clearTimeout(_timeouts[i]);
+        _timeouts = [];
+        if(webglRenderer){ try { webglRenderer.dispose(); } catch(e) {} }
+      },
       _debugAI: {
         choose: function(pieces, player, level, passiveTurns){ return aiChoose(pieces, player, level, passiveTurns); },
         config: function(level){ return Object.assign({}, AI_LEVELS[level] || AI_LEVELS.normal); },
