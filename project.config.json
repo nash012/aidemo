@@ -30,7 +30,11 @@
   "libVersion": "3.17.1",
   "simulatorPluginLibVersion": {},
   "packOptions": {
-    "ignore": [],
+    "ignore": [
+      {"type": "file", "value": "PROJECT_HANDOFF.md"},
+      {"type": "file", "value": ".gitignore"},
+      {"type": "folder", "value": ".git"}
+    ],
     "include": []
   },
   "isGameTourist": false,

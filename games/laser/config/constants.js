@@ -20,9 +20,9 @@ module.exports = {
   PIECE:{LASER:LASER,KING:KING,SHIELD:SHIELD,MIRROR:MIRROR,SWITCH:SWITCH},
   PIECE_VALUE:{king:10000,shield:3,switch:5,mirror:4,laser:0},
   AI_LEVELS:{
-    easy:{attack:0.7,defense:0.7,guard:0.8,reply:0,advance:0.35,initiative:0.4,passive:0.1,candidates:12,variety:4.0,depth:1,foresight:0.15,caution:0.25,blunder:0.15},
-    normal:{attack:2.0,defense:1.3,guard:1.0,reply:0.5,advance:0.85,initiative:1.5,passive:0.28,candidates:40,variety:1.0,depth:2,foresight:0.55,caution:0.7,blunder:0},
-    hard:{attack:2.5,defense:1.6,guard:1.3,reply:1.0,advance:1.15,initiative:2.0,passive:0.38,candidates:50,variety:0.2,depth:3,foresight:0.8,caution:1.0,blunder:0}
+    easy:{attack:2.5,defense:0.7,guard:0.8,reply:0,advance:0.7,initiative:1.2,passive:0.25,candidates:12,variety:4.0,depth:1,foresight:0.4,caution:0.25,blunder:0.15},
+    normal:{attack:3.5,defense:1.3,guard:1.0,reply:0.5,advance:1.0,initiative:1.8,passive:0.3,candidates:40,variety:1.0,depth:2,foresight:0.65,caution:0.7,blunder:0},
+    hard:{attack:4.5,defense:1.6,guard:1.3,reply:1.0,advance:1.3,initiative:2.5,passive:0.4,candidates:50,variety:0.2,depth:3,foresight:0.9,caution:1.0,blunder:0}
   },
   MIRROR_MAP:[{1:0,2:3},{3:0,2:1},{3:2,0:1},{1:2,0:3}],
   SWITCH_SLASH:{1:0,0:1,3:2,2:3},
@@ -37,9 +37,9 @@ module.exports = {
     order:["easy","normal","hard"],
     labels:{easy:"简单",normal:"普通",hard:"困难"},
     descriptions:{
-      easy:"",
-      normal:"",
-      hard:""
+      easy:"神经网络AI驱动",
+      normal:"神经网络AI驱动",
+      hard:"神经网络AI驱动"
     }
   }
 };

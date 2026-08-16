@@ -9,6 +9,7 @@ var Constants = require("../config/constants.js");
 var Formations = require("../config/formations.js");
 var Rules = require("../core/rules.js");
 var AI = require("../core/ai.js");
+var NeuralAI = require("../core/ai_neural.js");
 var Online = require("../online.js");
 
 module.exports = {
@@ -284,6 +285,7 @@ module.exports = {
       G.history={}; G.drawOffer=false; G.modal=null;
       G.undoSnapshot=null;
       G.playerPassiveTurns=0;
+      NeuralAI.resetHistory();
       G.turnStartPieces=G.pieces.map(copySnapshotValue);
     }
 
@@ -345,7 +347,7 @@ module.exports = {
       G.pieces = makeInitialPieces(G.layoutIdx);
       G.current=0; G.phase="select"; G.over=false; G.winner=-1;
       G.history={}; G.drawOffer=false; G.modal=null; G.busy=false;
-      G.playerPassiveTurns=0; G.turnStartPieces=null;
+      G.playerPassiveTurns=0; G.turnStartPieces=null; NeuralAI.resetHistory();
       setSetupCamera();
       render();
     }
@@ -2178,7 +2180,7 @@ module.exports = {
 
     function drawDifficultySelector(setupY){
       SETUP_DIFF_HITS = [];
-      var top=setupY+94, margin=16, gap=4, w=(SW-margin*2-gap*2)/3, h=34;
+      var top=setupY+94, margin=16, gap=4, n=DIFFICULTY_ORDER.length, w=(SW-margin*2-gap*(n-1))/n, h=34;
       ctx.fillStyle="#f2eee5";ctx.font="600 10px 'PingFang SC', sans-serif";ctx.textAlign="left";ctx.textBaseline="alphabetic";
       ctx.fillText("选择难度",margin,top);
       ctx.fillStyle="#6f828b";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.fillText("COMPUTER",70,top);
@@ -2190,7 +2192,7 @@ module.exports = {
         ctx.strokeStyle=active?"#f2eee5":"#344750";ctx.lineWidth=1;ctx.strokeRect(x+.5,y+.5,w-1,h-1);
         ctx.fillStyle=active?"#0d1519":"#91a0a8";ctx.font=(active?"700 ":"500 ")+"12px 'PingFang SC', sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";
         ctx.fillText(DIFFICULTY_LABEL[level],x+w/2,y+h/2+1);
-        if(active){ctx.fillStyle=level==="hard"?"#ff4d45":"#39aeea";ctx.fillRect(x,y,w,2);}
+        if(active){ctx.fillStyle=level==="hard"?"#ff4d45":level==="normal"?"#39aeea":"#52c41a";ctx.fillRect(x,y,w,2);}
       }
       ctx.fillStyle="#84939b";ctx.font="10px 'PingFang SC', sans-serif";ctx.textAlign="left";ctx.textBaseline="alphabetic";
       ctx.fillText(DIFFICULTY_DESC[G.difficulty],margin,top+58);
@@ -2585,7 +2587,14 @@ module.exports = {
       G.busy = true; render();
       _setTrackTimeout(function(){
         var act;
-        try { act = aiChoose(G.pieces, G.aiPlayer, G.lockedDifficulty, G.playerPassiveTurns); }
+        try {
+          if(G.lockedDifficulty && NeuralAI.isDifficultyLoaded(G.lockedDifficulty)){
+            NeuralAI.setDifficulty(G.lockedDifficulty);
+            act = NeuralAI.choose(G.pieces, G.aiPlayer, G.playerPassiveTurns);
+          } else {
+            act = aiChoose(G.pieces, G.aiPlayer, G.lockedDifficulty, G.playerPassiveTurns);
+          }
+        }
         catch(e) { G.busy = false; endTurn(); return; }
         applyAiAction(act);
       }, 420);
@@ -3234,16 +3243,23 @@ module.exports = {
           G.online.accessInfo = accessInfo;
           G.online.state = "waiting";
           render();
+          var hostGameStarted = false;
+          function hostStartGame(){
+            if(hostGameStarted) return;
+            hostGameStarted = true;
+            G.online.state = "starting";
+            clearMatchVisualState();
+            setupFrameSync();
+            startRps();
+          }
+          Online.prepareGameStart(hostStartGame);
           Online.shareInvite(accessInfo);
           Online.onRoomInfoChange(function(roomInfo){
             var members = (roomInfo && roomInfo.memberList) || [];
             if(members.length >= 2 && G.online && G.online.state === "waiting"){
-              G.online.state = "starting";
-              clearMatchVisualState();
-              setupFrameSync();
               Online.startGame(function(err3){
                 if(err3){ G.online.state="error"; G.online.errorMsg="开始游戏失败"; render(); return; }
-                startRps();
+                if(!hostGameStarted) hostStartGame();
               });
             }
           });
@@ -3260,21 +3276,52 @@ module.exports = {
       G.screen = "online_join";
       G.online = { state:"login", isHost:false, myPlayer:-1, accessInfo:accessInfo };
       render();
-      Online.login(function(err){
-        if(err){ G.online.state="error"; G.online.errorMsg="登录游戏服务失败"; render(); return; }
-        G.online.state = "joining";
-        render();
-        Online.joinRoom(accessInfo, function(err2){
-          if(err2){ G.online.state="error"; G.online.errorMsg="加入房间失败："+(err2.errMsg||err2.message||""); render(); return; }
+      function tryLogin(retries){
+        Online.login(function(err){
+          if(err){
+            if(retries < 2){
+              console.log("[Online] login retry " + (retries + 1));
+              G.online.state = "login";
+              render();
+              _setTrackTimeout(function(){ tryLogin(retries + 1); }, 1000);
+              return;
+            }
+            G.online.state="error"; G.online.errorMsg="登录游戏服务失败，请重试"; render(); return;
+          }
+          G.online.state = "joining";
+          render();
+          var guestGameStarted = false;
+          function guestStartGame(){
+            if(guestGameStarted) return;
+            guestGameStarted = true;
+            G.online.state = "starting";
+            clearMatchVisualState();
+            setupFrameSync();
+            startRps();
+          }
+          Online.prepareGameStart(guestStartGame);
+          tryJoin(accessInfo, 0, guestStartGame);
+        });
+      }
+      function tryJoin(roomInfo, retries, startFn){
+        Online.joinRoom(roomInfo, function(err2){
+          if(err2){
+            if(retries < 2){
+              console.log("[Online] joinRoom retry " + (retries + 1));
+              _setTrackTimeout(function(){ tryJoin(roomInfo, retries + 1, startFn); }, 1500);
+              return;
+            }
+            G.online.state="error"; G.online.errorMsg="加入房间失败，请让对方重新分享邀请"; render(); return;
+          }
           G.online.state = "starting";
           render();
-          setupFrameSync();
           Online.startGame(function(err3){
             if(err3){ G.online.state="error"; G.online.errorMsg="开始游戏失败"; render(); return; }
-            startRps();
+            startFn();
           });
         });
-      });
+      }
+      tryLogin(0);
     }
 
     var onlineWatchdog = null;
@@ -3610,7 +3657,14 @@ module.exports = {
       if(G.over || G.screen !== "playing") return;
       var opp = G.current;
       var act;
-      try { act = aiChoose(G.pieces, opp, G.lockedDifficulty || "normal", 0); }
+      try {
+        if(G.lockedDifficulty && NeuralAI.isDifficultyLoaded(G.lockedDifficulty)){
+          NeuralAI.setDifficulty(G.lockedDifficulty);
+          act = NeuralAI.choose(G.pieces, opp, 0);
+        } else {
+          act = aiChoose(G.pieces, opp, G.lockedDifficulty || "normal", 0);
+        }
+      }
       catch(e) { act = { kind:"skip" }; }
       var fire = false;
       if(act && act.kind !== "skip"){
@@ -3946,6 +4000,20 @@ module.exports = {
     enterSetup();
     initWebGLRenderer();
 
+    // 异步加载神经网络模型
+    NeuralAI.load("games/laser/models/laser_ai_easy.bin", "easy", function(err){
+      if(err) console.log("[NeuralAI] easy model not available");
+      else console.log("[NeuralAI] easy model ready");
+    });
+    NeuralAI.load("games/laser/models/laser_ai_normal.bin", "normal", function(err){
+      if(err) console.log("[NeuralAI] normal model not available");
+      else console.log("[NeuralAI] normal model ready");
+    });
+    NeuralAI.load("games/laser/models/laser_ai_hard.bin", "hard", function(err){
+      if(err) console.log("[NeuralAI] hard model not available");
+      else console.log("[NeuralAI] hard model ready");
+    });
+
     if (platform && platform.launchOptions) {
       var _roomInfo = Online.getLaunchRoomInfo(platform.launchOptions);
       if (_roomInfo) joinOnlineMatch(_roomInfo);
@@ -3995,7 +4063,7 @@ module.exports = {
         return true;
       },
       onShow: function(options){
-        if(G.online) return;
+        if(G.online && G.online.state !== "error") return;
         var query = (options && options.query) || {};
         if(!query.online){
           try {
@@ -4031,6 +4099,8 @@ module.exports = {
       },
       _debugAI: {
         choose: function(pieces, player, level, passiveTurns){ return aiChoose(pieces, player, level, passiveTurns); },
+        neuralChoose: function(pieces, player, passiveTurns, difficulty){ if(difficulty) NeuralAI.setDifficulty(difficulty); return NeuralAI.isLoaded() ? NeuralAI.choose(pieces, player, passiveTurns) : null; },
+        neuralLoaded: function(difficulty){ return difficulty ? NeuralAI.isDifficultyLoaded(difficulty) : NeuralAI.isLoaded(); },
         config: function(level){ return Object.assign({}, AI_LEVELS[level] || AI_LEVELS.normal); },
         actions: function(pieces, player){ return generateActions(pieces, player); },
         resolve: function(pieces, player, action){ return resolveTurn(pieces, player, action); },

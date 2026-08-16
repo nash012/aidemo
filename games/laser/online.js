@@ -83,10 +83,29 @@ var Online = {
     });
   },
 
+  onGameStartCb: null,
+  _gameStartRegistered: false,
+
+  prepareGameStart: function(callback) {
+    var self = this;
+    var mgr = this._getManager();
+    if (!mgr) return;
+    this._onGameStartCb = callback;
+    if (mgr.onGameStart && !this._gameStartRegistered) {
+      this._gameStartRegistered = true;
+      mgr.onGameStart(function() {
+        self._connected = true;
+        console.log("[Online] onGameStart event received");
+        if (self._onGameStartCb) self._onGameStartCb();
+      });
+    }
+  },
+
   startGame: function(callback) {
     var self = this;
     var mgr = this._getManager();
     if (!mgr) { callback(new Error("无 GameServerManager")); return; }
+    if (this._connected) { callback(null); return; }
     var called = false;
     function onReady() {
       if (called) return;
@@ -96,11 +115,15 @@ var Online = {
       callback(null);
     }
     if (mgr.onGameStart) {
-      console.log("[Online] registering onGameStart listener");
-      mgr.onGameStart(function() {
-        console.log("[Online] onGameStart event received");
-        onReady();
-      });
+      this._onGameStartCb = onReady;
+      if (!this._gameStartRegistered) {
+        this._gameStartRegistered = true;
+        mgr.onGameStart(function() {
+          self._connected = true;
+          console.log("[Online] onGameStart event received");
+          if (self._onGameStartCb) self._onGameStartCb();
+        });
+      }
     }
     mgr.startGame({
       success: function() {
@@ -110,10 +133,20 @@ var Online = {
         }
       },
       fail: function(err) {
-        console.error("[Online] startGame fail:", JSON.stringify(err));
+        console.log("[Online] startGame fail (may auto-start):", JSON.stringify(err));
         if (called) return;
-        called = true;
-        callback(err || new Error("开始游戏失败"));
+        if (mgr.onGameStart) {
+          console.log("[Online] waiting for onGameStart event (auto-start)...");
+          setTimeout(function() {
+            if (!called) {
+              called = true;
+              callback(err || new Error("开始游戏失败"));
+            }
+          }, 5000);
+        } else {
+          called = true;
+          callback(err || new Error("开始游戏失败"));
+        }
       }
     });
   },
@@ -210,6 +243,8 @@ var Online = {
     this._accessInfo = null;
     this._onFrameCb = null;
     this._onDisconnectCb = null;
+    this._onGameStartCb = null;
+    this._gameStartRegistered = false;
   },
 
   _shareImagePath: null,
