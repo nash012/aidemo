@@ -2860,8 +2860,7 @@ module.exports = {
           BUTTONS.push({x:px+44,y:py+ph-58,w:bw2,h:BTN_H,label:"再来一局",fn:function(){
             var frame={phase:"rematch"};
             if(!(G.online&&G.online.simulated)){
-              Online.sendFrame(frame);
-              startOnlineWatchdog(frame);
+              sendFrameWithRetry(frame);
             }
             rematchOnline();
           },style:"resultPrimary"});
@@ -3279,16 +3278,22 @@ module.exports = {
     }
 
     var onlineWatchdog = null;
-    var ONLINE_WATCHDOG_MS = 5000;
+    var ONLINE_RETRY_MS = 1000;
     var ONLINE_MAX_RETRIES = 3;
 
-    function startOnlineWatchdog(frameData){
+    function sendFrameWithRetry(frameData){
       clearOnlineWatchdog();
       var retries = 0;
-      function retry(){
+      function attempt(){
+        if(G.online && G.online.simulated) return;
+        var ok = Online.sendFrame(frameData);
+        if(ok){
+          console.log("[Online] frame sent successfully");
+          return;
+        }
         retries++;
         if(retries > ONLINE_MAX_RETRIES){
-          console.log("[Online] watchdog exhausted, showing disconnect");
+          console.log("[Online] send failed after " + retries + " retries, showing disconnect");
           clearOnlineWatchdog();
           if(G.screen === "playing" || G.screen === "rps" || G.screen === "formation_select" || G.screen === "formation_wait"){
             G.modal = "onlineDisconnect";
@@ -3297,11 +3302,10 @@ module.exports = {
           }
           return;
         }
-        console.log("[Online] watchdog retry " + retries + " for:", JSON.stringify(frameData));
-        if(!(G.online && G.online.simulated)) Online.sendFrame(frameData);
-        onlineWatchdog = _setTrackTimeout(retry, ONLINE_WATCHDOG_MS);
+        console.log("[Online] send failed, retry " + retries + " for:", JSON.stringify(frameData));
+        onlineWatchdog = _setTrackTimeout(attempt, ONLINE_RETRY_MS);
       }
-      onlineWatchdog = _setTrackTimeout(retry, ONLINE_WATCHDOG_MS);
+      attempt();
     }
 
     function clearOnlineWatchdog(){
@@ -3350,8 +3354,7 @@ module.exports = {
       console.log("[RPS] my choice:", choice, "simulated:", !!(G.online && G.online.simulated));
       var frame = { phase:"rps", choice:choice };
       if(!(G.online && G.online.simulated)){
-        Online.sendFrame(frame);
-        startOnlineWatchdog(frame);
+        sendFrameWithRetry(frame);
       }
       render();
       checkRpsResult();
@@ -3580,7 +3583,6 @@ module.exports = {
       var frame = { phase:"turn", action:G.lastAction, fire:fire };
       if(!(G.online && G.online.simulated)){
         Online.sendFrame(frame);
-        startOnlineWatchdog(frame);
       }
       G.lastAction = null;
     }
@@ -3859,8 +3861,7 @@ module.exports = {
         fn:function(){
           var frame = { phase:"formation", index:G.formationIdx };
           if(!(G.online && G.online.simulated)){
-            Online.sendFrame(frame);
-            startOnlineWatchdog(frame);
+            sendFrameWithRetry(frame);
           }
           beginOnlineMatch(G.formationIdx);
         }, style:"setupOnline"

@@ -122,7 +122,7 @@ var Online = {
     var mgr = this._getManager();
     if (!mgr || !this._connected) {
       console.log("[Online] sendFrame skipped: connected=" + this._connected);
-      return;
+      return false;
     }
     try {
       data._from = this._clientId;
@@ -131,8 +131,10 @@ var Online = {
       mgr.uploadFrame({
         actionList: [frameStr]
       });
+      return true;
     } catch (e) {
       console.error("[Online] sendFrame error:", e);
+      return false;
     }
   },
 
