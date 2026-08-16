@@ -37,9 +37,9 @@ module.exports = {
     order:["easy","normal","hard"],
     labels:{easy:"简单",normal:"普通",hard:"困难"},
     descriptions:{
-      easy:"主动推进并尝试简单攻击，仍会保留容错空间",
-      normal:"主动构建反射路线，并预判玩家下一步回应",
-      hard:"持续施压并推演多回合，优先形成致命光路"
+      easy:"",
+      normal:"",
+      hard:""
     }
   }
 };

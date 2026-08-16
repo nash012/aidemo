@@ -31,8 +31,29 @@ module.exports = {
     }
 
     /* -------------------- 安全区域与布局 -------------------- */
-    var SAFE_TOP = 52;
-    var SAFE_BOT = 36;
+    var _sysInfo = null;
+    try { _sysInfo = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync(); } catch(e) {}
+    if(!_sysInfo){ try { _sysInfo = wx.getSystemInfoSync(); } catch(e2) {} }
+    var _safeTop = 20, _safeBot = 0;
+    if(_sysInfo){
+      var _saTop = (_sysInfo.safeArea && typeof _sysInfo.safeArea.top === "number") ? _sysInfo.safeArea.top : 0;
+      var _sbH = (typeof _sysInfo.statusBarHeight === "number") ? _sysInfo.statusBarHeight : 0;
+      _safeTop = Math.max(_saTop, _sbH, 20);
+      if(_sysInfo.safeArea){
+        _safeBot = Math.max((_sysInfo.screenHeight || SH) - (_sysInfo.safeArea.bottom || SH), 0);
+      }
+    }
+    // 微信菜单按钮（右上角胶囊）位置是最可靠的安全区域来源
+    try {
+      var _menuBtn = wx.getMenuButtonBoundingClientRect();
+      if(_menuBtn && typeof _menuBtn.bottom === "number"){
+        _safeTop = Math.max(_safeTop, _menuBtn.bottom + 4);
+        console.log("[SafeArea] menuBtn.bottom=" + _menuBtn.bottom + " -> SAFE_TOP=" + _safeTop);
+      }
+    } catch(e) {}
+    console.log("[SafeArea] safeArea.top=" + (_saTop||0) + " statusBarH=" + (_sbH||0) + " -> SAFE_TOP=" + _safeTop + " SAFE_BOT=" + _safeBot);
+    var SAFE_TOP = _safeTop;
+    var SAFE_BOT = Math.max(_safeBot, 0);
     var TOPBAR_H = 62;
     var BTN_H = 46;
     var BTN_GAP = 8;
@@ -250,6 +271,7 @@ module.exports = {
       ONBOARD=[];CONTROL_DOCK=null;
       G.undoSnapshot=null; G.particles=[]; G.particleT=0;
       G.aiAnim=null; G.actionNotice=null; camAnim=null;
+      clearOnlineWatchdog();
       for(var i=0;i<_timeouts.length;i++) clearTimeout(_timeouts[i]);
       _timeouts = [];
     }
@@ -2094,11 +2116,9 @@ module.exports = {
     function drawSetupHeader(){
       ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
       ctx.fillStyle = "#a9c6d3"; ctx.font = "600 9px 'Arial Narrow', sans-serif";
-      ctx.fillText("OPTICAL ARRAY / PRE-MATCH CALIBRATION", 16, SAFE_TOP + 8);
       ctx.fillStyle = "#f2eee5"; ctx.font = "800 24px 'PingFang SC', sans-serif";
       ctx.fillText("来桌游", 16, SAFE_TOP + 36);
       ctx.fillStyle = "#8998a1"; ctx.font = "11px 'PingFang SC', sans-serif";
-      ctx.fillText("校准阵型与对手强度", 16, SAFE_TOP + 54);
 
       var railY = SAFE_TOP + 65, mid = SW * 0.58;
       var rail = ctx.createLinearGradient(16, railY, SW - 16, railY);
@@ -2271,10 +2291,11 @@ module.exports = {
         ctx.strokeRect(x+.5,y+.5,w-1,TOPBAR_H-11);
         ctx.globalAlpha=1;
       }
+      var padL = 56; // 避开左上角返回按钮
       ctx.fillStyle="#76909a";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.textAlign="left";ctx.textBaseline="alphabetic";
-      ctx.fillText("OPTICAL MATCH / LIVE ARRAY",x+10,y+12);
+      ctx.fillText("OPTICAL MATCH / LIVE ARRAY",x+padL,y+12);
       // 行动方色点 + 加大加粗回合文案
-      var dotX = x+16, txtX = x+28;
+      var dotX = x+padL+6, txtX = x+padL+18;
       if(isOnline && !G.over){
         var pulse = 0.5 + 0.5*Math.sin(G.beamPulseT*5);
         ctx.fillStyle=col;
@@ -2288,7 +2309,7 @@ module.exports = {
           ctx.fill();
           ctx.globalAlpha=1;
         }
-      } else { txtX = x+10; }
+      } else { txtX = x+padL; }
       ctx.fillStyle=col;ctx.font="800 19px 'PingFang SC', sans-serif";
       ctx.globalAlpha = (isOnline && !myTurn && !G.over) ? 0.8 : 1;
       ctx.fillText(turnTxt,txtX,y+36);
@@ -2298,7 +2319,7 @@ module.exports = {
         ? "在线对战 · 你执"+(G.online.myPlayer===0?"红":"蓝")
         : (G.lockedDifficulty ? DIFFICULTY_LABEL[G.lockedDifficulty] : "")+"电脑";
       ctx.fillText(modeTxt+" · 10 × 8",x+w-10,y+13);
-      ctx.fillStyle="#aebdc1";ctx.font="500 10px 'PingFang SC', sans-serif";ctx.fillText(G.busy?"等待对手…":"拖动棋盘可旋转视角",x+w-10,y+34);
+      ctx.fillStyle="#aebdc1";ctx.font="500 10px 'PingFang SC', sans-serif";ctx.fillText(G.busy&&G.phase!=="anim"?"等待对手…":"拖动棋盘可旋转视角",x+w-10,y+34);
       var railY=y+TOPBAR_H-15,mid=SW/2;
       var rail=ctx.createLinearGradient(x+10,railY,x+w-10,railY);
       rail.addColorStop(0,"#ff514a");rail.addColorStop(.48,"#ff514a");rail.addColorStop(.52,"#5ccbff");rail.addColorStop(1,"#5ccbff");
@@ -2349,6 +2370,7 @@ module.exports = {
       var phaseLabel="READY";
       var accent = G.busy ? "#f5d86e" : ownerColor(G.current,true);
       if(G.over){txt="本局已结束";phaseLabel="COMPLETE";}
+      else if(G.phase==="anim"){txt="激光发射中…";phaseLabel="LASER";accent="#f5d86e";}
       else if(G.busy){
         if(G.mode==="online"){
           var dots = ".".repeat(1 + Math.floor(G.beamPulseT*2) % 3);
@@ -2572,6 +2594,11 @@ module.exports = {
     function boardCellName(row, col){
       return String.fromCharCode(65 + col) + (ROWS - row);
     }
+    var PIECE_NAMES = {laser:"激光炮", king:"国王", shield:"盾牌", mirror:"单面镜", switch:"双面镜"};
+    function pieceNameOf(pi){
+      var p = G.pieces[pi];
+      return p ? (PIECE_NAMES[p.type] || "棋子") : "棋子";
+    }
 
     function commitAiAction(act){
       if(!act || act.kind === "skip") return true;
@@ -2723,11 +2750,10 @@ module.exports = {
       G.busy = true; G.sel = -1;
       try {
         G.aiAnim = createAiAnimation(act);
-        if(act.kind === "move") G.actionNotice = "电脑移动：" +
-          boardCellName(G.aiAnim.fromRow, G.aiAnim.fromCol) + " → " +
-          boardCellName(G.aiAnim.toRow, G.aiAnim.toCol);
-        else if(act.kind === "rot" || act.kind === "laserRot") G.actionNotice = "电脑旋转棋子";
-        else if(act.kind === "swap") G.actionNotice = "电脑互换棋子";
+        var pName = pieceNameOf(act.pi);
+        if(act.kind === "move") G.actionNotice = "电脑移动：" + pName;
+        else if(act.kind === "rot" || act.kind === "laserRot") G.actionNotice = "电脑旋转：" + pName;
+        else if(act.kind === "swap") G.actionNotice = "电脑互换：" + pName + " ↔ " + pieceNameOf(act.ti);
         else G.actionNotice = "电脑结束回合";
         render();
       } catch(e) {
@@ -2832,7 +2858,11 @@ module.exports = {
         if(G.mode==="online"){
           var bw2=(pw-88-BTN_GAP)/2;
           BUTTONS.push({x:px+44,y:py+ph-58,w:bw2,h:BTN_H,label:"再来一局",fn:function(){
-            if(!(G.online&&G.online.simulated)) Online.sendFrame({phase:"rematch"});
+            var frame={phase:"rematch"};
+            if(!(G.online&&G.online.simulated)){
+              Online.sendFrame(frame);
+              startOnlineWatchdog(frame);
+            }
             rematchOnline();
           },style:"resultPrimary"});
           BUTTONS.push({x:px+44+bw2+BTN_GAP,y:py+ph-58,w:bw2,h:BTN_H,label:"返回设置",fn:function(){
@@ -3248,9 +3278,43 @@ module.exports = {
       });
     }
 
+    var onlineWatchdog = null;
+    var ONLINE_WATCHDOG_MS = 5000;
+    var ONLINE_MAX_RETRIES = 3;
+
+    function startOnlineWatchdog(frameData){
+      clearOnlineWatchdog();
+      var retries = 0;
+      function retry(){
+        retries++;
+        if(retries > ONLINE_MAX_RETRIES){
+          console.log("[Online] watchdog exhausted, showing disconnect");
+          clearOnlineWatchdog();
+          if(G.screen === "playing" || G.screen === "rps" || G.screen === "formation_select" || G.screen === "formation_wait"){
+            G.modal = "onlineDisconnect";
+            G.onlineDisconnectReason = "timeout";
+            render();
+          }
+          return;
+        }
+        console.log("[Online] watchdog retry " + retries + " for:", JSON.stringify(frameData));
+        if(!(G.online && G.online.simulated)) Online.sendFrame(frameData);
+        onlineWatchdog = _setTrackTimeout(retry, ONLINE_WATCHDOG_MS);
+      }
+      onlineWatchdog = _setTrackTimeout(retry, ONLINE_WATCHDOG_MS);
+    }
+
+    function clearOnlineWatchdog(){
+      if(onlineWatchdog){
+        clearTimeout(onlineWatchdog);
+        onlineWatchdog = null;
+      }
+    }
+
     function setupFrameSync(){
       var playScreens = {"playing":1,"rps":1,"formation_select":1,"formation_wait":1};
       Online.onFrame(function(data){
+        clearOnlineWatchdog();
         handleOnlineFrame(data);
       });
       Online.onDisconnect(function(){
@@ -3284,7 +3348,11 @@ module.exports = {
       if(G.rpsMyChoice) return;
       G.rpsMyChoice = choice;
       console.log("[RPS] my choice:", choice, "simulated:", !!(G.online && G.online.simulated));
-      if(!(G.online && G.online.simulated)) Online.sendFrame({ phase:"rps", choice:choice });
+      var frame = { phase:"rps", choice:choice };
+      if(!(G.online && G.online.simulated)){
+        Online.sendFrame(frame);
+        startOnlineWatchdog(frame);
+      }
       render();
       checkRpsResult();
       if(G.online && G.online.simulated && !G.rpsOpponentChoice){
@@ -3429,6 +3497,7 @@ module.exports = {
       if(!data) return;
       console.log("[Online] handleOnlineFrame:", JSON.stringify(data));
       if(data.phase === "rps"){
+        if(G.rpsOpponentChoice) return;
         console.log("[RPS] opponent choice received:", data.choice);
         G.rpsOpponentChoice = data.choice;
         checkRpsResult();
@@ -3439,11 +3508,13 @@ module.exports = {
         return;
       }
       if(data.phase === "rematch"){
+        if(G.screen === "playing" && !G.over) return;
         console.log("[Online] rematch request received");
         rematchOnline();
         return;
       }
       if(data.phase === "formation"){
+        if(G.screen !== "formation_wait") return;
         console.log("[Online] formation received:", data.index);
         beginOnlineMatch(data.index);
         return;
@@ -3452,6 +3523,7 @@ module.exports = {
 
     function applyOnlineAction(data){
       if(G.screen !== "playing" || G.over) return;
+      if(G.current !== G.online.myPlayer) return;
       G.busy = true;
       G.sel = -1;
       G.onlinePendingFire = data.fire;
@@ -3460,13 +3532,11 @@ module.exports = {
           G.aiAnim = createAiAnimation(data.action);
           G.aiAnim.online = true;
           if(data.action.kind === "move"){
-            G.actionNotice = "对手移动：" +
-              boardCellName(G.aiAnim.fromRow, G.aiAnim.fromCol) + " → " +
-              boardCellName(G.aiAnim.toRow, G.aiAnim.toCol);
+            G.actionNotice = "对手移动：" + pieceNameOf(data.action.pi);
           } else if(data.action.kind === "rot" || data.action.kind === "laserRot"){
-            G.actionNotice = "对手旋转棋子";
+            G.actionNotice = "对手旋转：" + pieceNameOf(data.action.pi);
           } else if(data.action.kind === "swap"){
-            G.actionNotice = "对手互换棋子";
+            G.actionNotice = "对手互换：" + pieceNameOf(data.action.pi) + " ↔ " + pieceNameOf(data.action.ti);
           }
           render();
         } catch(e){
@@ -3507,11 +3577,16 @@ module.exports = {
 
     function sendOnlineTurnAction(fire){
       if(G.mode !== "online") return;
-      if(!(G.online && G.online.simulated)) Online.sendFrame({ phase:"turn", action:G.lastAction, fire:fire });
+      var frame = { phase:"turn", action:G.lastAction, fire:fire };
+      if(!(G.online && G.online.simulated)){
+        Online.sendFrame(frame);
+        startOnlineWatchdog(frame);
+      }
       G.lastAction = null;
     }
 
     function cancelOnline(){
+      clearOnlineWatchdog();
       if(G.online && G.online.simulated){
         G.online = null;
         G.mode = "pve";
@@ -3782,8 +3857,11 @@ module.exports = {
         label:"开始对战 · " + LAYOUTS[G.formationIdx].name,
         meta:"FORMATION SELECT",
         fn:function(){
-          if(!(G.online && G.online.simulated))
-            Online.sendFrame({ phase:"formation", index:G.formationIdx });
+          var frame = { phase:"formation", index:G.formationIdx };
+          if(!(G.online && G.online.simulated)){
+            Online.sendFrame(frame);
+            startOnlineWatchdog(frame);
+          }
           beginOnlineMatch(G.formationIdx);
         }, style:"setupOnline"
       });
@@ -3825,9 +3903,10 @@ module.exports = {
       ctx.fillStyle = "#f4f7ff"; ctx.font = "700 20px sans-serif";
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
       var isLeft = G.onlineDisconnectReason === "left";
-      ctx.fillText(isLeft ? "对手已退出" : "对手断线", SW/2, py + 54);
+      var isTimeout = G.onlineDisconnectReason === "timeout";
+      ctx.fillText(isLeft ? "对手已退出" : (isTimeout ? "连接超时" : "对手断线"), SW/2, py + 54);
       ctx.fillStyle = "#ff9ba7"; ctx.font = "14px sans-serif";
-      ctx.fillText(isLeft ? "对方离开了房间，对局结束。" : "对方已断开连接，对局结束。", SW/2, py + 94);
+      ctx.fillText(isLeft ? "对方离开了房间，对局结束。" : (isTimeout ? "多次重试未能同步，对局结束。" : "对方已断开连接，对局结束。"), SW/2, py + 94);
       BUTTONS = [{
         x:px+20, y:py+ph-56, w:pw-40, h:42,
         label:"返回设置", fn:function(){
