@@ -3526,7 +3526,7 @@ module.exports = {
 
     function applyOnlineAction(data){
       if(G.screen !== "playing" || G.over) return;
-      if(G.current !== G.online.myPlayer) return;
+      if(G.current === G.online.myPlayer) return;
       G.busy = true;
       G.sel = -1;
       G.onlinePendingFire = data.fire;
