@@ -1,1 +1,22 @@
-.superpowers/
+# 只管理微信小程序代码，其他文件不纳入 git
+# 排除根目录所有文件
+/*
+
+# 保留 .gitignore
+!.gitignore
+
+# 保留小程序目录
+!miniprogram/
+
+# 小程序目录内排除 IDE 配置
+miniprogram/.idea/
+
+# 额外排除（即使将来出现也不跟踪）
+ai_training/
+laser-ai-improvement/
+laser-game-filing/
+scripts/
+.trae-html-share-packages/
+.idea/
+*.pyc
+__pycache__/

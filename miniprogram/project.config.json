@@ -1,0 +1,43 @@
+{
+    "appid": "wx854f718874242510",
+    "projectname": "来桌游",
+    "description": "来桌游：激光反射策略对战",
+    "setting": {
+        "es6": true,
+        "minified": true,
+        "postcss": false,
+        "compileWorklet": false,
+        "uglifyFileName": false,
+        "uploadWithSourceMap": true,
+        "enhance": false,
+        "packNpmManually": false,
+        "packNpmRelationList": [],
+        "minifyWXSS": true,
+        "minifyWXML": true,
+        "localPlugins": false,
+        "disableUseStrict": false,
+        "useCompilerPlugins": false,
+        "condition": false,
+        "swc": false,
+        "disableSWC": true,
+        "babelSetting": {
+            "ignore": [],
+            "disablePlugins": [],
+            "outputPath": ""
+        }
+    },
+    "compileType": "miniGame",
+    "libVersion": "3.17.1",
+    "simulatorPluginLibVersion": {},
+    "packOptions": {
+        "ignore": [
+            {
+                "value": "games/upcoming",
+                "type": "folder"
+            }
+        ],
+        "include": []
+    },
+    "isGameTourist": false,
+    "editorSetting": {}
+}
