@@ -1922,7 +1922,7 @@ module.exports = {
         ctx.strokeStyle = "#f7ffff";ctx.lineWidth = 1;ctx.stroke();
         ctx.fillStyle = "#ff4d45";ctx.fillRect(b.x,b.y,3,b.h);
         ctx.fillStyle = "#55727e";ctx.font = "600 7px 'Arial Narrow', sans-serif";ctx.textAlign="left";ctx.textBaseline="middle";
-        ctx.fillText(b.meta||"CALIBRATED",b.x+14,b.y+13);
+        ctx.fillText(b.meta||"已校准",b.x+14,b.y+13);
         ctx.fillStyle = "#0d1519";ctx.font = "700 13px 'PingFang SC', sans-serif";ctx.textBaseline="middle";
         ctx.fillText(b.label,b.x+14,b.y+30);
         ctx.strokeStyle="#147daf";ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(b.x+b.w-19,b.y+b.h/2-4);ctx.lineTo(b.x+b.w-14,b.y+b.h/2);ctx.lineTo(b.x+b.w-19,b.y+b.h/2+4);ctx.stroke();
@@ -1934,7 +1934,7 @@ module.exports = {
         ctx.strokeStyle = "#63c9ff"; ctx.lineWidth = 1; ctx.strokeRect(b.x+0.5,b.y+0.5,b.w-1,b.h-1);
         ctx.fillStyle = "#63c9ff"; ctx.fillRect(b.x, b.y, b.w, 2);
         ctx.fillStyle = "#63c9ff"; ctx.font = "600 7px 'Arial Narrow', sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
-        ctx.fillText("ONLINE", b.x+10, b.y+12);
+        ctx.fillText("在线", b.x+10, b.y+12);
         ctx.fillStyle = "#d4f0ff"; ctx.font = "700 13px 'PingFang SC', sans-serif"; ctx.textBaseline = "middle";
         ctx.fillText(b.label, b.x+b.w/2, b.y+b.h/2+3);
         return;
@@ -2180,8 +2180,8 @@ module.exports = {
       ctx.beginPath(); ctx.moveTo(16,railY); ctx.lineTo(SW-16,railY); ctx.stroke();
       ctx.fillStyle = "#f2eee5"; ctx.beginPath();
       ctx.moveTo(mid,railY-5);ctx.lineTo(mid+5,railY);ctx.lineTo(mid,railY+5);ctx.lineTo(mid-5,railY);ctx.closePath();ctx.fill();
-      ctx.fillStyle = "#ff766f";ctx.font = "600 8px 'Arial Narrow', sans-serif";ctx.fillText("RED",16,railY-5);
-      ctx.fillStyle = "#77d3ff";ctx.textAlign = "right";ctx.fillText("BLUE",SW-16,railY-5);
+      ctx.fillStyle = "#ff766f";ctx.font = "600 8px 'Arial Narrow', sans-serif";ctx.fillText("红方",16,railY-5);
+      ctx.fillStyle = "#77d3ff";ctx.textAlign = "right";ctx.fillText("蓝方",SW-16,railY-5);
     }
 
     function drawPreviewFrame(setupY){
@@ -2196,8 +2196,8 @@ module.exports = {
       ctx.moveTo(x+w-c,y+h);ctx.lineTo(x+w,y+h);ctx.lineTo(x+w,y+h-c);ctx.stroke();
       ctx.fillStyle="rgba(8,12,16,0.78)";ctx.fillRect(x+1,y+1,112,18);
       ctx.fillStyle="#a9c6d3";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.textAlign="left";ctx.textBaseline="middle";
-      ctx.fillText("LIVE FORMATION",x+8,y+10);
-      ctx.fillStyle="#77d3ff";ctx.textAlign="right";ctx.fillText("BLUE VIEW",x+w-8,y+10);
+      ctx.fillText("实时阵型",x+8,y+10);
+      ctx.fillStyle="#77d3ff";ctx.textAlign="right";ctx.fillText("蓝方视角",x+w-8,y+10);
     }
 
     function drawFormationRail(setupY){
@@ -2208,7 +2208,7 @@ module.exports = {
       ctx.fillText(L.name+" · "+L.en,16,setupY+14);
       ctx.fillStyle="#8998a1";ctx.font="10px 'PingFang SC', sans-serif";ctx.fillText(L.desc,16,setupY+30);
       ctx.fillStyle="#f2eee5";ctx.font="600 10px 'PingFang SC', sans-serif";ctx.fillText("选择阵型",16,setupY+48);
-      ctx.fillStyle="#6f828b";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.fillText("FORMATION",70,setupY+48);
+      ctx.fillStyle="#6f828b";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.fillText("阵型",70,setupY+48);
       ctx.textAlign="right";ctx.fillStyle="#66747d";ctx.fillText((G.layoutIdx+1)+" / "+LAYOUTS.length,SW-16,setupY+48);
 
       var beam=ctx.createLinearGradient(x0,railY,x1,railY);
@@ -2233,7 +2233,7 @@ module.exports = {
       var top=setupY+94, margin=16, gap=4, n=DIFFICULTY_ORDER.length, w=(SW-margin*2-gap*(n-1))/n, h=34;
       ctx.fillStyle="#f2eee5";ctx.font="600 10px 'PingFang SC', sans-serif";ctx.textAlign="left";ctx.textBaseline="alphabetic";
       ctx.fillText("选择难度",margin,top);
-      ctx.fillStyle="#6f828b";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.fillText("COMPUTER",70,top);
+      ctx.fillStyle="#6f828b";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.fillText("电脑",70,top);
       ctx.fillStyle="#66747d";ctx.textAlign="right";ctx.fillText("开局后锁定",SW-margin,top);
       for(var i=0;i<DIFFICULTY_ORDER.length;i++){
         var level=DIFFICULTY_ORDER[i], x=margin+i*(w+gap), y=top+9, active=level===G.difficulty;
@@ -2351,7 +2351,7 @@ module.exports = {
       }
       var padL = 56; // 避开左上角返回按钮
       ctx.fillStyle="#76909a";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.textAlign="left";ctx.textBaseline="alphabetic";
-      ctx.fillText("OPTICAL MATCH / LIVE ARRAY",x+padL,y+12);
+      ctx.fillText("光学对战 / 实时阵型",x+padL,y+12);
       // 行动方色点 + 加大加粗回合文案
       var dotX = x+padL+6, txtX = x+padL+18;
       if(isOnline && !G.over){
@@ -2392,8 +2392,8 @@ module.exports = {
       }
       var markerX=G.current===0?x+w*.27:x+w*.73;
       ctx.fillStyle=G.over?"#9aa3bd":"#e9f0ed";ctx.beginPath();ctx.moveTo(markerX,railY-5);ctx.lineTo(markerX+5,railY);ctx.lineTo(markerX,railY+5);ctx.lineTo(markerX-5,railY);ctx.closePath();ctx.fill();
-      ctx.fillStyle="#ff7771";ctx.font="600 7px 'Arial Narrow', sans-serif";ctx.textAlign="left";ctx.fillText("RED",x+10,railY-4);
-      ctx.fillStyle="#78d7ff";ctx.textAlign="right";ctx.fillText("BLUE",x+w-10,railY-4);
+      ctx.fillStyle="#ff7771";ctx.font="600 7px 'Arial Narrow', sans-serif";ctx.textAlign="left";ctx.fillText("红方",x+10,railY-4);
+      ctx.fillStyle="#78d7ff";ctx.textAlign="right";ctx.fillText("蓝方",x+w-10,railY-4);
     }
 
     function drawMatchBoardFrame(){
@@ -2416,8 +2416,8 @@ module.exports = {
       ctx.moveTo(x+w-c,y+h);ctx.lineTo(x+w,y+h);ctx.lineTo(x+w,y+h-c);ctx.stroke();
       ctx.fillStyle="rgba(9,14,19,.78)";ctx.fillRect(x+1,y+1,110,17);ctx.fillRect(x+w-92,y+1,91,17);
       ctx.fillStyle="#9eb2b9";ctx.font="600 7px 'Arial Narrow', sans-serif";ctx.textAlign="left";ctx.textBaseline="middle";
-      ctx.fillText("TACTICAL FIELD / 10×8",x+7,y+9);
-      ctx.fillStyle="#77d3ff";ctx.textAlign="right";ctx.fillText("BLUE ARRAY",x+w-7,y+9);
+      ctx.fillText("战术棋盘 / 10×8",x+7,y+9);
+      ctx.fillStyle="#77d3ff";ctx.textAlign="right";ctx.fillText("蓝方阵型",x+w-7,y+9);
     }
 
     function drawStatus(){
@@ -2425,25 +2425,25 @@ module.exports = {
       var isOnline = G.mode === "online" && G.online;
       var myTurn = isOnline && G.current === G.online.myPlayer;
       var txt = "";
-      var phaseLabel="READY";
+      var phaseLabel="就绪";
       var accent = G.busy ? "#f5d86e" : ownerColor(G.current,true);
-      if(G.over){txt="本局已结束";phaseLabel="COMPLETE";}
-      else if(G.phase==="anim"){txt="激光发射中…";phaseLabel="LASER";accent="#f5d86e";}
+      if(G.over){txt="本局已结束";phaseLabel="完成";}
+      else if(G.phase==="anim"){txt="激光发射中…";phaseLabel="激光";accent="#f5d86e";}
       else if(G.busy){
         if(G.mode==="online"){
           var dots = ".".repeat(1 + Math.floor(G.beamPulseT*2) % 3);
-          txt="等待对手行动"+dots;phaseLabel="WAITING";accent="#f5d86e";
+          txt="等待对手行动"+dots;phaseLabel="等待";accent="#f5d86e";
         }
-        else{txt="电脑正在计算光路…";phaseLabel="COMPUTE";accent="#f5d86e";}
+        else{txt="电脑正在计算光路…";phaseLabel="计算";accent="#f5d86e";}
       }
       else if(G.phase==="select"){
         if(G.mode==="pve"&&G.current===G.aiPlayer) txt="";
         else if(isOnline&&!myTurn) txt="";
         else txt="选择棋子，或直接发射";
-        phaseLabel="SELECT";
+        phaseLabel="选择";
       }
-      else if(G.phase==="move"){txt="移动到高亮格；棋子上方可旋转";phaseLabel="MOVE";}
-      else if(G.phase==="fire"){txt="发射激光，或结束本回合";phaseLabel="FIRE";}
+      else if(G.phase==="move"){txt="移动到高亮格；棋子上方可旋转";phaseLabel="移动";}
+      else if(G.phase==="fire"){txt="发射激光，或结束本回合";phaseLabel="发射";}
       ctx.fillStyle="rgba(14,23,29,.94)";ctx.fillRect(12,y+3,SW-24,STATUS_H-6);
       ctx.strokeStyle= isOnline && !G.over ? accent : "#31444d";
       ctx.globalAlpha = isOnline && !G.over ? (myTurn && !G.busy ? 0.9 : 0.4) : 1;
@@ -3013,7 +3013,7 @@ module.exports = {
         {x:px+margin, y:py+ph-62, w:w, h:42,
           label:"继续对局", fn:closeModal, style:"ghost"},
         {x:px+margin+w+gap, y:py+ph-62, w:w, h:42,
-          label:"确认返回", fn:confirmReturnToSetup, style:"danger"}
+          label:"确认", fn:confirmReturnToSetup, style:"danger"}
       ];
       for(var i=0;i<BUTTONS.length;i++) drawButton(BUTTONS[i]);
     }
@@ -3867,7 +3867,7 @@ module.exports = {
       ctx.restore();
       ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
       ctx.fillStyle = "#a9c6d3"; ctx.font = "600 9px 'Arial Narrow', sans-serif";
-      ctx.fillText("ROCK · PAPER · SCISSORS", SW/2, SAFE_TOP + 20);
+      ctx.fillText("猜拳定先手", SW/2, SAFE_TOP + 20);
       ctx.fillStyle = "#f2eee5"; ctx.font = "800 24px 'PingFang SC', sans-serif";
       ctx.fillText("石头·剪刀·布", SW/2, SAFE_TOP + 52);
       ctx.fillStyle = "#8998a1"; ctx.font = "11px 'PingFang SC', sans-serif";
@@ -3932,7 +3932,7 @@ module.exports = {
       ctx.fillStyle = "#8998a1"; ctx.font = "11px 'PingFang SC', sans-serif";
       ctx.fillText("你", SW*0.3, cy + 30);
       ctx.fillStyle = "#66747d"; ctx.font = "700 16px sans-serif";
-      ctx.fillText("VS", SW/2, cy);
+      ctx.fillText("对决", SW/2, cy);
       ctx.fillStyle = G.rpsResult === "win" ? "#3a8aff" : "#ff4a4a";
       ctx.font = "36px sans-serif";
       ctx.fillText(icons[G.rpsOpponentChoice], SW*0.7, cy);
@@ -3969,14 +3969,14 @@ module.exports = {
       var hintTop=setupY+94, margin=16;
       ctx.fillStyle="#f2eee5";ctx.font="600 10px 'PingFang SC', sans-serif";ctx.textAlign="left";ctx.textBaseline="alphabetic";
       ctx.fillText("你赢得了先手选择权",margin,hintTop);
-      ctx.fillStyle="#6f828b";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.fillText("PRIORITY PICK",margin+96,hintTop);
+      ctx.fillStyle="#6f828b";ctx.font="600 8px 'Arial Narrow', sans-serif";ctx.fillText("先手选择",margin+96,hintTop);
       ctx.fillStyle="#63c9ff";ctx.font="10px 'PingFang SC', sans-serif";
       ctx.fillText("选择阵型后点击开始对战，对手将等待你的决定",margin,hintTop+16);
       var actionY=Math.min(setupY+199,SH-SAFE_BOT-48);
       BUTTONS.push({
         x:margin, y:actionY, w:SW-margin*2, h:46,
         label:"开始对战 · " + LAYOUTS[G.formationIdx].name,
-        meta:"FORMATION SELECT",
+        meta:"阵型选择",
         fn:function(){
           var frame = { phase:"formation", index:G.formationIdx };
           if(!(G.online && G.online.simulated)){

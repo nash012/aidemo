@@ -274,7 +274,7 @@ var Online = {
       c.fillStyle = '#3a8aff'; c.beginPath(); c.arc(340, 300, 24, 0, Math.PI*2); c.fill();
       c.strokeStyle = '#7ab5ff'; c.lineWidth = 2; c.stroke();
       c.fillStyle = '#8998a1'; c.font = 'bold 22px sans-serif';
-      c.fillText('VS', 250, 300);
+      c.fillText('对决', 250, 300);
       c.fillStyle = 'rgba(255,255,255,0.1)'; c.font = '12px sans-serif';
       c.fillText('激光对决 · 策略博弈', 250, 360);
       var self = this;

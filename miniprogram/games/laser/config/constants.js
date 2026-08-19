@@ -37,9 +37,9 @@ module.exports = {
     order:["easy","normal","hard"],
     labels:{easy:"简单",normal:"普通",hard:"困难"},
     descriptions:{
-      easy:"神经网络AI驱动",
-      normal:"神经网络AI驱动",
-      hard:"神经网络AI驱动"
+      easy:"",
+      normal:"",
+      hard:""
     }
   }
 };
